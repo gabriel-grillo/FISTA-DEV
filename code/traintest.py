@@ -44,7 +44,7 @@ def problem_definition( dataset, mode, problem, batch_size, dataset_ratio ):
     if mode == 'train':
         ###### REFERENCE FUNCTIONAL VALUES FOR TRAINING
         gamma_FISTA   = 2.0
-        alpha_FISTA   = 0.75
+        alpha_FISTA   = 0.0
         maxiter_FISTA = 500
         @tf.function
         def F_ref( b ):

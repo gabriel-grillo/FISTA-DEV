@@ -107,7 +107,7 @@ def objective_function( problem, A, A_adj, A_norm, b, W, W_adj, W_norm, lam ):
             out = tf.math.maximum( 0.0, inp )
             return out
     elif problem == 'lstv':
-        lower = -inf
+        lower = 0.0
         upper = + inf
         def f( x ):
             r = A( x ) - b

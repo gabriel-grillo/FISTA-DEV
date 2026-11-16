@@ -52,7 +52,7 @@ MINITER             = [  1 ]
 MAXITER             = [ 10 ]
 
 TEST_MODE           = 'val' # 'test' or 'val'
-TEST_ITERS          = 500
+TEST_ITERS          = 200
 TEST_BATCH_SIZE     = 32
 
 TRAIN_DATASET_RATIO = [ 0.05 ]
@@ -60,20 +60,20 @@ TEST_DATASET_RATIO  = [ 0.05 ]
 DATASET_RATIO = list( zip( TRAIN_DATASET_RATIO, TEST_DATASET_RATIO ) )
 
 # FISTA PARAMETER
-GAMMA_FISTA_UNTRAINED  = [ 1.1, 1.5, 2.0, 2.5 ]
-ALPHA_FISTA_UNTRAINED  = [ 0.0, 0.25, 0.5, 0.75, 0.9 ]
+GAMMA_FISTA_UNTRAINED  = [ 1.1 ]
+ALPHA_FISTA_UNTRAINED  = [ 0.5 ]
 T_VARIANT_UNTRAINED    = [ 1 ]
 PARAMS_FISTA_UNTRAINED = list( product( GAMMA_FISTA_UNTRAINED, ALPHA_FISTA_UNTRAINED, T_VARIANT_UNTRAINED ) )
 
 # FISTA-DEV PARAMETERS -- set a negative const_tau to enable varying tau
-GAMMA     = [ ]
-ALPHA     = [ ]
-T_VARIANT = [ ]
+GAMMA     = [ 1.1  ]
+ALPHA     = [ 0.5  ]
+T_VARIANT = [ 1 ]
 PARAMS = list( product( GAMMA, ALPHA, T_VARIANT ) )
-ABLATION = [ 'd', 'e', 'v', 'dev', 'theta', 'all' ]
+ABLATION = [ 'all' ]
 
 # DEEPOPT PARAMETER
-ALPHA_DO = [ ]
+ALPHA_DO = [ 0.5 ]
 
 #######################################################################################################
 ############################################## EDIT HERE ##############################################
@@ -84,8 +84,8 @@ start_time = time.time()
 
 ##### TEST UNTRAINED ALGORITHMS
 for dataset_ratio in set(TEST_DATASET_RATIO):
-    # print(f'Testing ISTA with {100*dataset_ratio} percent of data')
-    # test_untrained( DATASET, PROBLEM, TEST_MODE, 'ista', TEST_BATCH_SIZE, TEST_ITERS, dataset_ratio = dataset_ratio )
+    print(f'Testing ISTA with {100*dataset_ratio} percent of data')
+    test_untrained( DATASET, PROBLEM, TEST_MODE, 'ista', TEST_BATCH_SIZE, TEST_ITERS, dataset_ratio = dataset_ratio )
     for params in PARAMS_FISTA_UNTRAINED:
         gamma, alpha, t_variant = params
         print(f'Testing FISTA ( gamma={gamma}, alpha={alpha}, t_variant={t_variant} ) with {100*dataset_ratio} percent of data')
@@ -105,7 +105,7 @@ for i, options in enumerate( product( DATASET_RATIO, list(zip(MINITER,MAXITER)),
     label += f'alpha={alpha}, '
     label += f't_variant={t_variant}, '
     label += f'data_ratio={train_dataset_ratio}, '
-    label += f'ablation={ablation}.'
+    label += f'ablation={ablation}'
 
     print('Training ' + label)
     train_fista_dev( DATASET, PROBLEM, miniter, maxiter, gamma, alpha,

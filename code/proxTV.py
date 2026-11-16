@@ -11,7 +11,7 @@ def dual_projection( u ):
     return u / tf.math.maximum( tf.math.abs(u), 1.0 )
 
 class proxTV():
-    def __init__(self, D, D_transp, D_norm, lam, lower = -inf, upper = inf, MAXITER = 150):
+    def __init__(self, D, D_transp, D_norm, lam, lower = -inf, upper = inf, MAXITER = 150, jfb = True):
         self.D = D
         self.D_transp = D_transp
         self.D_norm_sq = D_norm ** 2
@@ -19,6 +19,7 @@ class proxTV():
         self.lower = lower
         self.upper = upper
         self.MAXITER = MAXITER
+        self.jfb = jfb
 
     # Projecting the image onto the box
     def box_projection( self, x ):
@@ -37,6 +38,10 @@ class proxTV():
             self.u = tf.zeros( dual_shape, dtype = tf.float32, name = 'u' )
             self.dual_gap = tf.zeros( (batch_size,), dtype = tf.float32, name = 'dualgap' ) #just to set the shape
 
+        # Inputs of the inner solver without gradient tracking (Jacobian-free backpropagation)
+        z_in   = tf.stop_gradient( z )   if self.jfb else z
+        rho_in = tf.stop_gradient( rho ) if self.jfb else rho
+
         # Initializations
         i = tf.constant( 0, dtype = tf.int32, name = 'proxTV_i' )
         t_next = tf.constant( 1, dtype = tf.float32, name = 'proxTV_t' )
@@ -45,7 +50,7 @@ class proxTV():
         w = self.u
 
         # Dual stepsize
-        beta = 1 / ( rho * self.D_norm_sq )
+        beta = 1 / ( rho_in * self.D_norm_sq )
 
         # Flag to indicate whether the stopping criterion have been met (for each batch item)
         flag = tf.zeros( tf.shape(self.dual_gap), dtype = tf.bool, name = 'flag' )
@@ -76,7 +81,7 @@ class proxTV():
 
             # Current primal approximation
             D_transp_w = self.D_transp( w )
-            x = self.box_projection( z - rho * D_transp_w )
+            x = self.box_projection( z_in - rho_in * D_transp_w )
             
             # Compute gradient of dual objective function
             grad = self.D( x )
@@ -99,5 +104,11 @@ class proxTV():
 
             # t for next iteration
             t_next = (1.0 + tf.sqrt(1.0 + 4.0 * t**2)) / 2.0
+
+        # Differentiable reconstruction of the primal point with the dual variable fixed:
+        # same value as the last x (the duality gap certificate is preserved), O(1) memory in backprop
+        if self.jfb:
+            x = self.box_projection( z - rho * self.D_transp( tf.stop_gradient( w ) ) )
+            self.u = tf.stop_gradient( self.u )
 
         return x, tf.where( flag, 1, 0 ), iter_batch

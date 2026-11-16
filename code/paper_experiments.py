@@ -3,33 +3,20 @@ import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ["PYTHONHASHSEED"] = "42"
 
-import pynvml
 import tensorflow as tf
 
 #### GPU settings
 TF_USE_GPU  = True
-MIN_VRAM_MB = 12 * 1024
+VRAM_MB = 13.0 * 1024
 if TF_USE_GPU:
     # Listing visable GPUs and asserting that there is at least one
     gpus = tf.config.list_physical_devices('GPU')
     if not gpus:
         raise RuntimeError("No GPU detected.")
-    # Asserting that the first GPU has sufficient free VRAM
-    pynvml.nvmlInit()
-    try:
-        mem = pynvml.nvmlDeviceGetMemoryInfo( pynvml.nvmlDeviceGetHandleByIndex( 0 ) )
-        if mem.free < MIN_VRAM_MB * 1024**2:
-            raise RuntimeError(
-                f"Insufficient free VRAM. "
-                f"Required: {MIN_VRAM_MB / 1024:.1f} GiB. "
-                f"Available: {mem.free / 1024**3:.1f} GiB."
-            )
-    finally:
-        pynvml.nvmlShutdown()
     # Configuring TensorFlow GPU memory limit for the first GPU
     tf.config.set_logical_device_configuration(
         gpus[0],
-        [ tf.config.LogicalDeviceConfiguration( memory_limit = MIN_VRAM_MB) ]
+        [ tf.config.LogicalDeviceConfiguration( memory_limit = VRAM_MB) ]
     )
 else:
     tf.config.set_visible_devices( [], 'GPU' )
@@ -40,400 +27,152 @@ tf.keras.utils.set_random_seed(42)
 # Enabling operations determinism
 tf.config.experimental.enable_op_determinism()
 
-import numpy as np
 import time
 from itertools import product
-from traintest import test_untrained, train_fista_ld, test_fista_ld, train_deepopt, test_deepopt
+from traintest import test_untrained, train_fista_dev, test_fista_dev, train_deepopt, test_deepopt
+
+from paper_config import *
+
+#### Which experiments to run (they are meant to be run in order, editing the selected parameters in paper_config.py
+#### after the analysis of each experiment with paper_results.py)
+RUN_EXPERIMENT_1  = True    # Parameter selection for FISTA (untrained)
+RUN_EXPERIMENT_2A = True    # Parameter selection for FISTA-DEV and DeepOpt: screening
+RUN_EXPERIMENT_2B = True    # Parameter selection for FISTA-DEV: full budget for the finalists
+RUN_EXPERIMENT_3  = True    # Ablation study for FISTA-DEV
+RUN_EXPERIMENT_4  = True    # Comparison with the baselines on the test set
+
+#######################################################################################################################
+################################################## AUXILIARY ROUTINES #################################################
+#######################################################################################################################
+
+def print_header( title ):
+    print('\n------------------------------------------------------------------------------------------------------')
+    print(f'{title:^102}')
+    print('------------------------------------------------------------------------------------------------------\n')
+
+def run_untrained( mode, params_list, test_dataset_ratio, run_ista = True ):
+    if run_ista:
+        print(f'Testing ISTA ({mode}) with {100*test_dataset_ratio} percent of data')
+        test_untrained( DATASET, PROBLEM, mode, 'ista', TEST_BATCH_SIZE, TEST_ITERS, dataset_ratio = test_dataset_ratio )
+    for gamma, alpha, t_variant in params_list:
+        print(f'Testing FISTA ({mode}): gamma={gamma}, alpha={alpha}, t_variant={t_variant}, {100*test_dataset_ratio} percent of data')
+        test_untrained( DATASET, PROBLEM, mode, 'fista', TEST_BATCH_SIZE, TEST_ITERS,
+                        gamma = gamma, alpha = alpha, t_variant = t_variant, dataset_ratio = test_dataset_ratio )
+
+def run_fista_dev( mode, params_list, ablation_list, epochs_to_save, train_dataset_ratio, test_dataset_ratio, train = True ):
+    for i, ( params, ablation ) in enumerate( product( params_list, ablation_list ) ):
+        gamma, alpha, t_variant = params
+        label  = f'FISTA-DEV {i+1}: N=[{MINITER},{K}], gamma={gamma}, alpha={alpha}, t_variant={t_variant}, '
+        label += f'data_ratio={train_dataset_ratio}, ablation={ablation}'
+        if train:
+            print('Training ' + label)
+            train_fista_dev( DATASET, PROBLEM, MINITER, K, gamma, alpha,
+                             max(epochs_to_save), TRAIN_BATCH_SIZE, DATE, LOAD_SAVED_MODELS, ablation, t_variant,
+                             dataset_ratio = train_dataset_ratio, epochs_to_save = epochs_to_save )
+        for epochs in epochs_to_save:
+            print(f'Testing ({mode}) ' + label + f' trained with {epochs} epochs')
+            test_fista_dev( DATASET, PROBLEM, mode, MINITER, K, gamma, alpha, epochs,
+                            TEST_BATCH_SIZE, TEST_ITERS, DATE, ablation, t_variant,
+                            dataset_ratio = ( train_dataset_ratio, test_dataset_ratio ) )
+
+def run_deepopt( mode, alpha_list, epochs_to_save, train_dataset_ratio, test_dataset_ratio, train = True ):
+    for i, alpha in enumerate( alpha_list ):
+        label = f'DeepOpt {i+1}: N=[{MINITER},{K}], alpha={alpha}, data_ratio={train_dataset_ratio}'
+        if train:
+            print('Training ' + label)
+            train_deepopt( DATASET, PROBLEM, MINITER, K, alpha,
+                           max(epochs_to_save), TRAIN_BATCH_SIZE, DATE, LOAD_SAVED_MODELS,
+                           dataset_ratio = train_dataset_ratio, epochs_to_save = epochs_to_save )
+        for epochs in epochs_to_save:
+            print(f'Testing ({mode}) ' + label + f' trained with {epochs} epochs')
+            test_deepopt( DATASET, PROBLEM, mode, MINITER, K, alpha, epochs, DATE,
+                          TEST_BATCH_SIZE, TEST_ITERS, dataset_ratio = ( train_dataset_ratio, test_dataset_ratio ) )
 
 #### For time measurement
 start_time = time.time()
 
-#### Date to save results
-DATE = '0'
-
 #######################################################################################################################
 #################################################### EXPERIMENT 1 #####################################################
+######################################## Parameter selection for FISTA (untrained) ####################################
 #######################################################################################################################
+# ISTA and FISTA on the validation set, for a grid of (gamma, alpha) and both variants of T_k.
+# Analysis (results.py): iters_to_tol_table -> choose BEST_FISTA.
 
-print('\n------------------------------------------------------------------------------------------------------')
-print('---------------------------------------- EXPERIMENT 1 (Start) ----------------------------------------')
-print('------------------------------------------------------------------------------------------------------\n')
+if RUN_EXPERIMENT_1:
+    print_header('EXPERIMENT 1 (Start)')
 
-#### TRAINING - TESTING PARAMETERS
-DATASET             = 'mayo_clinic_512'
-PROBLEM             = 'lasso'
-TRAIN_BATCH_SIZE    = 1
-EPOCHS_TO_SAVE      = [ 20 ]
-EPOCHS              = max(EPOCHS_TO_SAVE)
-LOAD_SAVED_MODELS   = False
-MINITER             = [  1 ]
-MAXITER             = [ 20 ]
+    run_untrained( 'val', list( product( GAMMA_FISTA, ALPHA_FISTA, T_VARIANT_FISTA ) ), VAL_DATASET_RATIO, run_ista = True )
 
-TEST_MODE           = 'val'
-TEST_ITERS          = 1000
-TEST_BATCH_SIZE     = 64
-
-TRAIN_DATASET_RATIO = [ 0.05 ]
-TEST_DATASET_RATIO  = [ 1.0 ] * len(TRAIN_DATASET_RATIO)
-DATASET_RATIO = list( zip( TRAIN_DATASET_RATIO, TEST_DATASET_RATIO ) )
-
-### TEST UNTRAINED ALGORITHMS
-# FISTA PARAMETER
-TAU_FISTA_UNTRAINED = [ 1.0 ]
-for dataset_ratio in set(TEST_DATASET_RATIO):
-    print(f'Testing ISTA with {100*dataset_ratio} percent of data')
-    test_untrained( DATASET, PROBLEM, TEST_MODE, 'ista', TEST_BATCH_SIZE, TEST_ITERS, dataset_ratio = dataset_ratio )
-    for tau_fista in TAU_FISTA_UNTRAINED:
-        print(f'Testing FISTA (tau={tau_fista}) with {100*dataset_ratio} percent of data')
-        test_untrained( DATASET, PROBLEM, TEST_MODE, 'fista', TEST_BATCH_SIZE, TEST_ITERS, tau = tau_fista, dataset_ratio = dataset_ratio )
-
-### TRAINING - TESTING FISTA-LD -- set a negative const_tau to enable varying tau
-ALPHA       = np.logspace(-3.5, -1.5, 5)
-GAMMA       = [ 0.01, 0.025, 0.05, 0.075, 0.1 ]
-CONST_TAU   = [ -1.0, -1.0, -1.0, -1.0, -1.0 ]
-PARAMS      = list( product( ALPHA, list( zip( GAMMA, CONST_TAU ) ) ) )
-for i, options in enumerate( product( DATASET_RATIO, list(zip(MINITER,MAXITER)), PARAMS ) ):
-    dataset_ratio, iters, params = options
-    train_dataset_ratio, test_dataset_ratio = dataset_ratio
-    alpha, gamma_const_tau = params
-    gamma, const_tau = gamma_const_tau
-    miniter, maxiter = iters
-
-    label = 'FISTA-LD ' + str(i+1) + ': '
-    label += f'N=[{miniter},{maxiter}], '
-    label += f'alpha={alpha}, '
-    if const_tau <= 0:
-        label += f'gamma={gamma}, '
-    else:
-        label += f'tau={const_tau}, '
-    label += f'data_ratio={train_dataset_ratio}'
-
-    print('Training ' + label)
-    train_fista_ld( DATASET, PROBLEM, miniter, maxiter, alpha, gamma, const_tau,
-                    EPOCHS, TRAIN_BATCH_SIZE, DATE, LOAD_SAVED_MODELS,
-                    dataset_ratio = train_dataset_ratio, epochs_to_save = EPOCHS_TO_SAVE )
-    
-    for epochs in EPOCHS_TO_SAVE:
-        print('Testing ' + label + f' trained with {epochs} epochs')
-        test_fista_ld( DATASET, PROBLEM, TEST_MODE, miniter, maxiter, alpha, gamma, const_tau, epochs,
-                       TEST_BATCH_SIZE, TEST_ITERS, DATE, dataset_ratio = dataset_ratio )
-
-#### TRAINING - TESTING DEEPOPT
-ALPHA_DO = [ 0.1, 0.25, 0.5, 0.75, 0.9 ]
-for i, options in enumerate( product( DATASET_RATIO, list(zip(MINITER,MAXITER)), ALPHA_DO ) ):
-    dataset_ratio, iters, alpha = options
-    train_dataset_ratio, test_dataset_ratio = dataset_ratio
-    miniter, maxiter = iters
-
-    label = 'DeepOpt ' + str(i+1) + ': '
-    label += f'N=[{miniter},{maxiter}], '
-    label += f'alpha={alpha}, '
-    label += f'data_ratio={train_dataset_ratio}'
-
-    print('Training ' + label)
-    train_deepopt( DATASET, PROBLEM, miniter, maxiter, alpha,
-                   EPOCHS, TRAIN_BATCH_SIZE, DATE, LOAD_SAVED_MODELS,
-                   dataset_ratio = train_dataset_ratio, epochs_to_save = EPOCHS_TO_SAVE )
-    
-    for epochs in EPOCHS_TO_SAVE:
-        print('Testing ' + label + f' trained with {epochs} epochs')
-        test_deepopt( DATASET, PROBLEM, TEST_MODE, miniter, maxiter, alpha, epochs, DATE,
-                      TEST_BATCH_SIZE, TEST_ITERS, dataset_ratio = dataset_ratio )
-
-print('\n------------------------------------------------------------------------------------------------------')
-print('---------------------------------------- EXPERIMENT 1 (End) ------------------------------------------')
-print('------------------------------------------------------------------------------------------------------\n')
+    print_header('EXPERIMENT 1 (End)')
 
 #######################################################################################################################
 #################################################### EXPERIMENT 2 #####################################################
+################################################ Parameter selection for FISTA-DEV ####################################
 #######################################################################################################################
+# Stage A (screening, flag RUN_EXPERIMENT_2A): grid of (gamma, alpha) with a fraction of the training data and few epochs.
+#                      DeepOpt's parameter is screened with the same budget.
+#                      Analysis (results.py): validation loss + iters_to_tol_table -> FINALISTS_FISTA_DEV, BEST_ALPHA_DO.
+# Stage B (full budget, flag RUN_EXPERIMENT_2B): finalists retrained with all the training data and the full number of epochs.
+#                      Analysis (results.py): validation loss + iters_to_tol_table -> BEST_FISTA_DEV.
 
-print('\n------------------------------------------------------------------------------------------------------')
-print('---------------------------------------- EXPERIMENT 2 (Start) ----------------------------------------')
-print('------------------------------------------------------------------------------------------------------\n')
+if RUN_EXPERIMENT_2A:
+    print_header('EXPERIMENT 2A (Start)')
 
-#### TRAINING - TESTING PARAMETERS
-DATASET             = 'mayo_clinic_512'
-PROBLEM             = 'lasso'
-TRAIN_BATCH_SIZE    = 1
-EPOCHS_TO_SAVE      = [ 20, 40, 60, 80, 100 ]
-EPOCHS              = max(EPOCHS_TO_SAVE)
-LOAD_SAVED_MODELS   = False
-MINITER             = [  1 ]
-MAXITER             = [ 20 ]
+    #### Stage A: screening
+    run_fista_dev( 'val', list( product( GAMMA_DEV, ALPHA_DEV, T_VARIANT_DEV ) ), [ 'all' ],
+                   SCREEN_EPOCHS_TO_SAVE, SCREEN_TRAIN_DATASET_RATIO, VAL_DATASET_RATIO )
+    run_deepopt( 'val', ALPHA_DO, SCREEN_EPOCHS_TO_SAVE, SCREEN_TRAIN_DATASET_RATIO, VAL_DATASET_RATIO )
 
-TEST_MODE           = 'val'
-TEST_ITERS          = 1000
-TEST_BATCH_SIZE     = 64
+    print_header('EXPERIMENT 2A (End)')
 
-TRAIN_DATASET_RATIO = [ 1.0 ]
-TEST_DATASET_RATIO  = [ 1.0 ] * len(TRAIN_DATASET_RATIO)
-DATASET_RATIO = list( zip( TRAIN_DATASET_RATIO, TEST_DATASET_RATIO ) )
+if RUN_EXPERIMENT_2B:
+    print_header('EXPERIMENT 2B (Start)')
 
-#### TEST UNTRAINED ALGORITHMS
-# same as Experiment 1
+    #### Stage B: full budget for the finalists (and for the selected DeepOpt)
+    run_fista_dev( 'val', FINALISTS_FISTA_DEV, [ 'all' ],
+                   FULL_EPOCHS_TO_SAVE, FULL_TRAIN_DATASET_RATIO, VAL_DATASET_RATIO )
+    run_deepopt( 'val', [ BEST_ALPHA_DO ], FULL_EPOCHS_TO_SAVE, FULL_TRAIN_DATASET_RATIO, VAL_DATASET_RATIO )
 
-### TRAINING - TESTING FISTA-LD -- set a negative const_tau to enable varying tau
-ALPHA     = [ 10**(-3.0) ]
-GAMMA     = [ 0.025 ]
-CONST_TAU = [ -1.0 ]
-PARAMS    = list( zip( ALPHA, list( zip( GAMMA, CONST_TAU ) ) ) )
-for i, options in enumerate( product( DATASET_RATIO, list(zip(MINITER,MAXITER)), PARAMS ) ):
-    dataset_ratio, iters, params = options
-    train_dataset_ratio, test_dataset_ratio = dataset_ratio
-    alpha, gamma_const_tau = params
-    gamma, const_tau = gamma_const_tau
-    miniter, maxiter = iters
-
-    label = 'FISTA-LD ' + str(i+1) + ': '
-    label += f'N=[{miniter},{maxiter}], '
-    label += f'alpha={alpha}, '
-    if const_tau <= 0:
-        label += f'gamma={gamma}, '
-    else:
-        label += f'tau={const_tau}, '
-    label += f'data_ratio={train_dataset_ratio}'
-
-    print('Training ' + label)
-    train_fista_ld( DATASET, PROBLEM, miniter, maxiter, alpha, gamma, const_tau,
-                    EPOCHS, TRAIN_BATCH_SIZE, DATE, LOAD_SAVED_MODELS,
-                    dataset_ratio = train_dataset_ratio, epochs_to_save = EPOCHS_TO_SAVE )
-    
-    for epochs in EPOCHS_TO_SAVE:
-        print('Testing ' + label + f' trained with {epochs} epochs')
-        test_fista_ld( DATASET, PROBLEM, TEST_MODE, miniter, maxiter, alpha, gamma, const_tau, epochs,
-                       TEST_BATCH_SIZE, TEST_ITERS, DATE, dataset_ratio = dataset_ratio )
-        
-print('\n------------------------------------------------------------------------------------------------------')
-print('---------------------------------------- EXPERIMENT 2 (End) ------------------------------------------')
-print('------------------------------------------------------------------------------------------------------\n')
+    print_header('EXPERIMENT 2B (End)')
 
 #######################################################################################################################
 #################################################### EXPERIMENT 3 #####################################################
+################################################## Ablation study for FISTA-DEV #######################################
 #######################################################################################################################
+# FISTA-DEV with the selected parameters, learning only some of the components, on the validation set.
+# The full model ('all') was trained in Experiment 2 (stage B) and is only tested here.
+# Analysis (results.py): relative gap + step sizes + iters_to_tol_table for each ablation.
 
-print('\n------------------------------------------------------------------------------------------------------')
-print('---------------------------------------- EXPERIMENT 3 (Start) ----------------------------------------')
-print('------------------------------------------------------------------------------------------------------\n')
+if RUN_EXPERIMENT_3:
+    print_header('EXPERIMENT 3 (Start)')
 
-#### TRAINING - TESTING PARAMETERS
-DATASET             = 'mayo_clinic_512'
-PROBLEM             = 'lasso'
-TRAIN_BATCH_SIZE    = 1
-EPOCHS_TO_SAVE      = [ 20 ]
-EPOCHS              = max(EPOCHS_TO_SAVE)
-LOAD_SAVED_MODELS   = False
-MINITER             = [  1 ]
-MAXITER             = [ 20 ]
+    run_fista_dev( 'val', [ BEST_FISTA_DEV ], ABLATION,
+                   [ FINAL_EPOCHS ], FULL_TRAIN_DATASET_RATIO, VAL_DATASET_RATIO )
+    run_fista_dev( 'val', [ BEST_FISTA_DEV ], [ 'all' ],
+                   [ FINAL_EPOCHS ], FULL_TRAIN_DATASET_RATIO, VAL_DATASET_RATIO, train = False )
 
-TEST_MODE           = 'test'
-TEST_ITERS          = 1000
-TEST_BATCH_SIZE     = 64
-
-TRAIN_DATASET_RATIO = [ 1.0 ]
-TEST_DATASET_RATIO  = [ 1.0 ] * len(TRAIN_DATASET_RATIO)
-DATASET_RATIO = list( zip( TRAIN_DATASET_RATIO, TEST_DATASET_RATIO ) )
-
-#### TEST UNTRAINED ALGORITHMS
-# FISTA PARAMETER
-TAU_FISTA_UNTRAINED = [ 1.0 ]
-for dataset_ratio in set(TEST_DATASET_RATIO):
-    print(f'Testing ISTA with {100*dataset_ratio} percent of data')
-    test_untrained( DATASET, PROBLEM, TEST_MODE, 'ista', TEST_BATCH_SIZE, TEST_ITERS, dataset_ratio = dataset_ratio )
-    for tau_fista in TAU_FISTA_UNTRAINED:
-        print(f'Testing FISTA (tau={tau_fista}) with {100*dataset_ratio} percent of data')
-        test_untrained( DATASET, PROBLEM, TEST_MODE, 'fista', TEST_BATCH_SIZE, TEST_ITERS, tau = tau_fista, dataset_ratio = dataset_ratio )
-
-### TRAINING - TESTING FISTA-LD -- set a negative const_tau to enable varying tau
-ALPHA     = [ 10**(-3.0) ]
-GAMMA     = [ 0.025 ]
-CONST_TAU = [ -1.0 ]
-PARAMS    = list( zip( ALPHA, list( zip( GAMMA, CONST_TAU ) ) ) )
-for i, options in enumerate( product( DATASET_RATIO, list(zip(MINITER,MAXITER)), PARAMS ) ):
-    dataset_ratio, iters, params = options
-    train_dataset_ratio, test_dataset_ratio = dataset_ratio
-    alpha, gamma_const_tau = params
-    gamma, const_tau = gamma_const_tau
-    miniter, maxiter = iters
-
-    label = 'FISTA-LD ' + str(i+1) + ': '
-    label += f'N=[{miniter},{maxiter}], '
-    label += f'alpha={alpha}, '
-    if const_tau <= 0:
-        label += f'gamma={gamma}, '
-    else:
-        label += f'tau={const_tau}, '
-    label += f'data_ratio={train_dataset_ratio}'
-
-    # Only need to test (training was performed in experiment 2)    
-    for epochs in EPOCHS_TO_SAVE:
-        print('Testing ' + label + f' trained with {epochs} epochs')
-        test_fista_ld( DATASET, PROBLEM, TEST_MODE, miniter, maxiter, alpha, gamma, const_tau, epochs,
-                       TEST_BATCH_SIZE, TEST_ITERS, DATE, dataset_ratio = dataset_ratio )
-
-### TRAINING - TESTING DEEPOPT
-ALPHA_DO = [ 0.5 ]
-for i, options in enumerate( product( DATASET_RATIO, list(zip(MINITER,MAXITER)), ALPHA_DO ) ):
-    dataset_ratio, iters, alpha = options
-    train_dataset_ratio, test_dataset_ratio = dataset_ratio
-    miniter, maxiter = iters
-
-    label = 'DeepOpt ' + str(i+1) + ': '
-    label += f'N=[{miniter},{maxiter}], '
-    label += f'alpha={alpha}, '
-    label += f'data_ratio={train_dataset_ratio}'
-
-    print('Training ' + label)
-    train_deepopt( DATASET, PROBLEM, miniter, maxiter, alpha,
-                   EPOCHS, TRAIN_BATCH_SIZE, DATE, LOAD_SAVED_MODELS,
-                   dataset_ratio = train_dataset_ratio, epochs_to_save = EPOCHS_TO_SAVE )
-    
-    for epochs in EPOCHS_TO_SAVE:
-        print('Testing ' + label + f' trained with {epochs} epochs')
-        test_deepopt( DATASET, PROBLEM, TEST_MODE, miniter, maxiter, alpha, epochs, DATE,
-                      TEST_BATCH_SIZE, TEST_ITERS, dataset_ratio = dataset_ratio )
-        
-print('\n------------------------------------------------------------------------------------------------------')
-print('---------------------------------------- EXPERIMENT 3 (End) ------------------------------------------')
-print('------------------------------------------------------------------------------------------------------\n')
+    print_header('EXPERIMENT 3 (End)')
 
 #######################################################################################################################
 #################################################### EXPERIMENT 4 #####################################################
+############################################ Comparison with the baselines (test set) #################################
 #######################################################################################################################
+# ISTA, FISTA (classical alpha = 0 and BEST_FISTA), FISTA-DEV (BEST_FISTA_DEV) and DeepOpt (BEST_ALPHA_DO) on the
+# test set. The trained models come from Experiment 2 (stage B) and are only tested here.
+# Analysis (results.py): relative gap + iters_to_tol_table + wall-clock time.
 
-print('\n------------------------------------------------------------------------------------------------------')
-print('---------------------------------------- EXPERIMENT 4 (Start) ----------------------------------------')
-print('------------------------------------------------------------------------------------------------------\n')
+if RUN_EXPERIMENT_4:
+    print_header('EXPERIMENT 4 (Start)')
 
-#### TRAINING - TESTING PARAMETERS
-DATASET             = 'mayo_clinic_512'
-PROBLEM             = 'lstv'
-TRAIN_BATCH_SIZE    = 1
-EPOCHS_TO_SAVE      = [ 20 ]
-EPOCHS              = max(EPOCHS_TO_SAVE)
-LOAD_SAVED_MODELS   = False
-MINITER             = [  1 ]
-MAXITER             = [ 20 ]
+    gamma_best, _, t_variant_best = BEST_FISTA
+    FISTA_TEST = [ BEST_FISTA, ( gamma_best, 0.0, t_variant_best ) ]
 
-TEST_MODE           = 'val'
-TEST_ITERS          = 200
-TEST_BATCH_SIZE     = 64
+    run_untrained( 'test', FISTA_TEST, TEST_DATASET_RATIO, run_ista = True )
+    run_fista_dev( 'test', [ BEST_FISTA_DEV ], [ 'all' ],
+                   [ FINAL_EPOCHS ], FULL_TRAIN_DATASET_RATIO, TEST_DATASET_RATIO, train = False )
+    run_deepopt( 'test', [ BEST_ALPHA_DO ], [ FINAL_EPOCHS ], FULL_TRAIN_DATASET_RATIO, TEST_DATASET_RATIO, train = False )
 
-TRAIN_DATASET_RATIO = [ 0.05 ]
-TEST_DATASET_RATIO  = [ 1.0 ] * len(TRAIN_DATASET_RATIO)
-DATASET_RATIO = list( zip( TRAIN_DATASET_RATIO, TEST_DATASET_RATIO ) )
-
-#### TEST UNTRAINED ALGORITHMS
-# FISTA PARAMETER
-TAU_FISTA_UNTRAINED = [ 0.1, 0.25, 0.5, 0.75, 0.9 ]
-for dataset_ratio in set(TEST_DATASET_RATIO):
-    for tau_fista in TAU_FISTA_UNTRAINED:
-        print(f'Testing FISTA (tau={tau_fista}) with {100*dataset_ratio} percent of data')
-        test_untrained( DATASET, PROBLEM, TEST_MODE, 'fista', TEST_BATCH_SIZE, TEST_ITERS, tau = tau_fista, dataset_ratio = dataset_ratio )
-
-### TRAINING - TESTING FISTA-LD
-ALPHA     = [ 10**(-3.0) ]
-GAMMA     = [ -1.0, -1.0, -1.0, -1.0, -1.0 ]
-CONST_TAU = [ 0.1, 0.25, 0.5, 0.75, 0.9 ]
-PARAMS      = list( product( ALPHA, list( zip( GAMMA, CONST_TAU ) ) ) )
-for i, options in enumerate( product( DATASET_RATIO, list(zip(MINITER,MAXITER)), PARAMS ) ):
-    dataset_ratio, iters, params = options
-    train_dataset_ratio, test_dataset_ratio = dataset_ratio
-    alpha, gamma_const_tau = params
-    gamma, const_tau = gamma_const_tau
-    miniter, maxiter = iters
-
-    label = 'FISTA-LD ' + str(i+1) + ': '
-    label += f'N=[{miniter},{maxiter}], '
-    label += f'alpha={alpha}, '
-    if const_tau <= 0:
-        label += f'gamma={gamma}, '
-    else:
-        label += f'tau={const_tau}, '
-    label += f'data_ratio={train_dataset_ratio}'
-
-    print('Training ' + label)
-    train_fista_ld( DATASET, PROBLEM, miniter, maxiter, alpha, gamma, const_tau,
-                    EPOCHS, TRAIN_BATCH_SIZE, DATE, LOAD_SAVED_MODELS,
-                    dataset_ratio = train_dataset_ratio, epochs_to_save = EPOCHS_TO_SAVE )
-    
-    for epochs in EPOCHS_TO_SAVE:
-        print('Testing ' + label + f' trained with {epochs} epochs')
-        test_fista_ld( DATASET, PROBLEM, TEST_MODE, miniter, maxiter, alpha, gamma, const_tau, epochs,
-                       TEST_BATCH_SIZE, TEST_ITERS, DATE, dataset_ratio = dataset_ratio )
-        
-print('\n------------------------------------------------------------------------------------------------------')
-print('---------------------------------------- EXPERIMENT 4 (End) ------------------------------------------')
-print('------------------------------------------------------------------------------------------------------\n')
-
-#######################################################################################################################
-#################################################### EXPERIMENT 5 #####################################################
-#######################################################################################################################
-
-print('\n------------------------------------------------------------------------------------------------------')
-print('---------------------------------------- EXPERIMENT 5 (Start) ----------------------------------------')
-print('------------------------------------------------------------------------------------------------------\n')
-
-#### TRAINING - TESTING PARAMETERS
-DATASET             = 'mayo_clinic_512'
-PROBLEM             = 'lstv'
-TRAIN_BATCH_SIZE    = 1
-EPOCHS_TO_SAVE      = [ 20 ]
-EPOCHS              = max(EPOCHS_TO_SAVE)
-LOAD_SAVED_MODELS   = False
-MINITER             = [  1 ]
-MAXITER             = [ 20 ]
-
-TEST_MODE           = 'test'
-TEST_ITERS          = 200
-TEST_BATCH_SIZE     = 64
-
-TRAIN_DATASET_RATIO = [ 1.0 ]
-TEST_DATASET_RATIO  = [ 1.0 ] * len(TRAIN_DATASET_RATIO)
-DATASET_RATIO = list( zip( TRAIN_DATASET_RATIO, TEST_DATASET_RATIO ) )
-
-#### TEST UNTRAINED ALGORITHMS
-# FISTA PARAMETER
-TAU_FISTA_UNTRAINED = [ 0.5 ]
-for dataset_ratio in set(TEST_DATASET_RATIO):
-    for tau_fista in TAU_FISTA_UNTRAINED:
-        print(f'Testing FISTA (tau={tau_fista}) with {100*dataset_ratio} percent of data')
-        test_untrained( DATASET, PROBLEM, TEST_MODE, 'fista', TEST_BATCH_SIZE, TEST_ITERS, tau = tau_fista, dataset_ratio = dataset_ratio )
-
-### TRAINING - TESTING FISTA-LD
-ALPHA     = [ 10**(-3.0) ]
-GAMMA     = [ -1.0 ]
-CONST_TAU = [ 0.5 ]
-PARAMS    = list( zip( ALPHA, list( zip( GAMMA, CONST_TAU ) ) ) )
-for i, options in enumerate( product( DATASET_RATIO, list(zip(MINITER,MAXITER)), PARAMS ) ):
-    dataset_ratio, iters, params = options
-    train_dataset_ratio, test_dataset_ratio = dataset_ratio
-    alpha, gamma_const_tau = params
-    gamma, const_tau = gamma_const_tau
-    miniter, maxiter = iters
-
-    label = 'FISTA-LD ' + str(i+1) + ': '
-    label += f'N=[{miniter},{maxiter}], '
-    label += f'alpha={alpha}, '
-    if const_tau <= 0:
-        label += f'gamma={gamma}, '
-    else:
-        label += f'tau={const_tau}, '
-    label += f'data_ratio={train_dataset_ratio}'
-
-    print('Training ' + label)
-    train_fista_ld( DATASET, PROBLEM, miniter, maxiter, alpha, gamma, const_tau,
-                    EPOCHS, TRAIN_BATCH_SIZE, DATE, LOAD_SAVED_MODELS,
-                    dataset_ratio = train_dataset_ratio, epochs_to_save = EPOCHS_TO_SAVE )
-    
-    for epochs in EPOCHS_TO_SAVE:
-        print('Testing ' + label + f' trained with {epochs} epochs')
-        test_fista_ld( DATASET, PROBLEM, TEST_MODE, miniter, maxiter, alpha, gamma, const_tau, epochs,
-                       TEST_BATCH_SIZE, TEST_ITERS, DATE, dataset_ratio = dataset_ratio )
-
-print('\n------------------------------------------------------------------------------------------------------')
-print('---------------------------------------- EXPERIMENT 5 (End) ------------------------------------------')
-print('------------------------------------------------------------------------------------------------------\n')
+    print_header('EXPERIMENT 4 (End)')
 
 #### For time measurement
 end_time = time.time()

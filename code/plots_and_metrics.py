@@ -40,7 +40,7 @@ def get_label( algorithm, list_of_parameters ):
         raise ValueError(f'Unknown algorithm: {algorithm}')
     return label
 
-def load_data( data_name, test_mode, dataset, test_dataset_ratio, problem, date, fista_list, fista_ld_list, deepopt_list ):
+def load_data( data_name, test_mode, dataset, test_dataset_ratio, problem, date, fista_list, fista_dev_list, deepopt_list ):
     dicts_list = []
     if data_name in ['Fhist', 'flag_hist', 'inner_iter_hist', 'eps_hist', 'stepsize_hist']:
         ##### ISTA RESULTS
@@ -66,15 +66,15 @@ def load_data( data_name, test_mode, dataset, test_dataset_ratio, problem, date,
                 )
             )
     #### FISTA-DEV RESULTS
-    for i,options in enumerate(fista_ld_list):
+    for i,options in enumerate(fista_dev_list):
         params, train_dataset_ratio, epochs, minmaxiter, ablation = options
         gamma, alpha, t_variant = params
         miniter, maxiter = minmaxiter
-        hist_path_fista_ld = hist_path( 'fista-dev', [ test_mode, dataset, train_dataset_ratio, test_dataset_ratio, 
+        hist_path_fista_dev = hist_path( 'fista-dev', [ test_mode, dataset, train_dataset_ratio, test_dataset_ratio, 
                                                       problem, miniter, maxiter, gamma, alpha, date, ablation, t_variant, epochs ] )
         dicts_list.append(
             dict(
-                data  = np.load( os.path.join( hist_path_fista_ld, data_name + '.npy') ),
+                data  = np.load( os.path.join( hist_path_fista_dev, data_name + '.npy') ),
                 label = get_label( 'fista-dev', [ train_dataset_ratio, miniter, maxiter, gamma, alpha, ablation, t_variant, epochs ] ),
                 ls    = '-',
                 c     = COLORS[i%len(COLORS)]
@@ -174,7 +174,7 @@ def compute_quantiles_rel_opt_gap( F_dicts, dataset, test_mode, problem, test_da
     #### COMPUTING QUANTILES
     compute_quantiles( F_dicts )
 
-def compute_metrics( test_mode, dataset, test_dataset_ratio, problem, date, fista_ld_list, deepopt_list ):
+def compute_metrics( test_mode, dataset, test_dataset_ratio, problem, date, fista_dev_list, deepopt_list ):
     val_loss_list = []
     penalty_list = []
     label_list = []
@@ -187,17 +187,17 @@ def compute_metrics( test_mode, dataset, test_dataset_ratio, problem, date, fist
     F_train_hist = np.stack( F_train_hist_list )
     F_opt_train = np.min( F_train_hist, axis = 1 )[:,None]
     #### FISTA-DEV RESULTS
-    for options in fista_ld_list:
+    for options in fista_dev_list:
         params, train_dataset_ratio, epochs, minmaxiter, ablation = options
-        gamma, alpha = params
+        gamma, alpha, t_variant = params
         miniter, maxiter = minmaxiter
-        hist_path_fista_ld = hist_path( 'fista-dev', [ test_mode, dataset, train_dataset_ratio, test_dataset_ratio, 
-                                                      problem, miniter, maxiter, gamma, alpha, date, ablation, epochs ] )
-        hist = np.load( os.path.join( hist_path_fista_ld, 'Fhist.npy') )
+        hist_path_fista_dev = hist_path( 'fista-dev', [ test_mode, dataset, train_dataset_ratio, test_dataset_ratio, 
+                                                      problem, miniter, maxiter, gamma, alpha, date, ablation, t_variant, epochs ] )
+        hist = np.load( os.path.join( hist_path_fista_dev, 'Fhist.npy') )
         val_loss_list.append( np.mean( ( hist[:,miniter:maxiter+10+1] - F_opt_train ) / ( F_train_hist[:,miniter:maxiter+10+1] - F_opt_train ) ) )
         penalty_max_iters = min( F_train_hist.shape[1], hist.shape[1] )
         penalty_list.append( np.mean( np.maximum( (hist[:,maxiter+10+1:penalty_max_iters] - F_train_hist[:,maxiter+10+1:penalty_max_iters])/F_train_hist[:,maxiter+10+1:penalty_max_iters], 0.0 ) ) )
-        label_list.append( get_label( 'fista-dev', [ train_dataset_ratio, miniter, maxiter, gamma, alpha, ablation, epochs ] ) )
+        label_list.append( get_label( 'fista-dev', [ train_dataset_ratio, miniter, maxiter, gamma, alpha, ablation, t_variant, epochs ] ) )
     #### DEEPOPT RESULTS
     for options in deepopt_list:
         alpha, train_dataset_ratio, epochs, minmaxiter = options
@@ -229,3 +229,62 @@ def print_metrics_analysis( val_loss, penalty, label_list, table_path = None, ta
         with open( os.path.join( table_path, table_name + '.txt' ), 'w' ) as f:
             f.write(table.to_string( float_format = "%.2e" ) )
             # f.write(table.to_latex( float_format="%.2e" ) )
+
+def iters_to_tol_table( rel_gap_dicts, params_list, tols, inner_dicts = None, table_path = None, table_name = None ):
+    """Median number of iterations needed to reach each relative gap tolerance.
+
+    rel_gap_dicts : list of dicts whose 'data' is the relative gap (F-F*)/F*, shape [N, MAXITER+1]
+    params_list   : list of (gamma, alpha, t_variant), in the same order as rel_gap_dicts
+    tols          : list of tolerances, e.g. [1e-2, 1e-3, 1e-5]
+    inner_dicts   : optional list of dicts whose 'data' is inner_iter_hist, shape [N, MAXITER],
+                    in the same order; if given, the median total number of inner (proxTV)
+                    iterations until reaching the tolerance is shown in parentheses
+    For each tolerance, two tables are built:
+        'iters' : median outer iterations (median total inner iterations)
+        'frac'  : percentage of problems that reached the tolerance
+    """
+    tables = {}
+    for tol in tols:
+        rows = []
+        for i, (d, params) in enumerate( zip( rel_gap_dicts, params_list ) ):
+            gamma, alpha, t_variant = params
+            rel_gap = d.get('data')
+            max_iter = rel_gap.shape[1] - 1
+            #### FIRST ITERATION REACHING THE TOLERANCE (inf IF NEVER REACHED)
+            reached = rel_gap <= tol
+            ever = reached.any( axis = 1 )
+            k_hit = np.where( ever, reached.argmax( axis = 1 ), np.inf )
+            #### MEDIAN OUTER ITERATIONS
+            med = np.median( k_hit )
+            iters = f'{int(med)}' if np.isfinite( med ) else f'> {max_iter}'
+            #### MEDIAN TOTAL INNER ITERATIONS UNTIL THE TOLERANCE
+            if inner_dicts is not None:
+                inner_cum = np.cumsum( inner_dicts[i].get('data'), axis = 1 )   # inner_cum[:,k-1] = inner iters up to iteration k
+                inner_cum = np.concatenate( [ np.zeros( ( inner_cum.shape[0], 1 ) ), inner_cum ], axis = 1 )
+                inner_hit = np.where( ever, inner_cum[ np.arange( len(k_hit) ), np.where( ever, k_hit, 0 ).astype(int) ], np.inf )
+                med_inner = np.median( inner_hit )
+                iters += f' ({int(med_inner)})' if np.isfinite( med_inner ) else ' (-)'
+            #### PERCENTAGE OF PROBLEMS THAT REACHED THE TOLERANCE
+            frac = f'{100 * np.mean( ever ):.0f}%'
+            rows.append( dict( gamma = gamma, alpha = alpha, t_variant = t_variant, iters = iters, frac = frac ) )
+        df = pd.DataFrame( rows )
+        #### TABLES: gamma IN THE ROWS, (t_variant, alpha) IN THE COLUMNS
+        multiple_variants = df['t_variant'].nunique() > 1
+        columns = [ 't_variant', 'alpha' ] if multiple_variants else 'alpha'
+        iters_title = 'median outer iterations (median total inner iterations)' if inner_dicts is not None else 'median outer iterations'
+        tables[tol] = {}
+        for key, title in [ ('iters', iters_title), ('frac', 'percentage of problems reaching the tolerance') ]:
+            table = df.pivot( index = 'gamma', columns = columns, values = key )
+            table = table.sort_index( axis = 1 )
+            table.index = [ f'{g:.2f}' for g in table.index ]
+            table.index.name = 'gamma'
+            tables[tol][key] = table
+            print( f'Relative gap tolerance {tol:.0e} -- {title}:' )
+            print( table.to_string(), '\n' )
+            if table_path is not None and table_name is not None:
+                fname = f'{table_name}_{key}_tol{tol:.0e}'
+                with open( os.path.join( table_path, fname + '.txt' ), 'w' ) as f:
+                    f.write( table.to_string() )
+                with open( os.path.join( table_path, fname + '.tex' ), 'w' ) as f:
+                    f.write( table.to_latex() )
+    return tables
