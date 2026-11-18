@@ -96,7 +96,7 @@ start_time = time.time()
 ######################################## Parameter selection for FISTA (untrained) ####################################
 #######################################################################################################################
 # ISTA and FISTA on the validation set, for a grid of (gamma, alpha) and both variants of T_k.
-# Analysis (results.py): iters_to_tol_table -> choose BEST_FISTA.
+# Analysis (paper_results.py): cost_to_tol_table -> choose BEST_FISTA.
 
 if RUN_EXPERIMENT_1:
     print_header('EXPERIMENT 1 (Start)')
@@ -111,9 +111,9 @@ if RUN_EXPERIMENT_1:
 #######################################################################################################################
 # Stage A (screening, flag RUN_EXPERIMENT_2A): grid of (gamma, alpha) with a fraction of the training data and few epochs.
 #                      DeepOpt's parameter is screened with the same budget.
-#                      Analysis (results.py): validation loss + iters_to_tol_table -> FINALISTS_FISTA_DEV, BEST_ALPHA_DO.
+#                      Analysis (paper_results.py): validation loss + cost_to_tol_table -> FINALISTS_FISTA_DEV, BEST_ALPHA_DO.
 # Stage B (full budget, flag RUN_EXPERIMENT_2B): finalists retrained with all the training data and the full number of epochs.
-#                      Analysis (results.py): validation loss + iters_to_tol_table -> BEST_FISTA_DEV.
+#                      Analysis (paper_results.py): validation loss + cost_to_tol_table -> BEST_FISTA_DEV.
 
 if RUN_EXPERIMENT_2A:
     print_header('EXPERIMENT 2A (Start)')
@@ -141,7 +141,7 @@ if RUN_EXPERIMENT_2B:
 #######################################################################################################################
 # FISTA-DEV with the selected parameters, learning only some of the components, on the validation set.
 # The full model ('all') was trained in Experiment 2 (stage B) and is only tested here.
-# Analysis (results.py): relative gap + step sizes + iters_to_tol_table for each ablation.
+# Analysis (paper_results.py): relative gap + step sizes + cost_to_tol_table for each ablation.
 
 if RUN_EXPERIMENT_3:
     print_header('EXPERIMENT 3 (Start)')
@@ -159,7 +159,7 @@ if RUN_EXPERIMENT_3:
 #######################################################################################################################
 # ISTA, FISTA (classical alpha = 0 and BEST_FISTA), FISTA-DEV (BEST_FISTA_DEV) and DeepOpt (BEST_ALPHA_DO) on the
 # test set. The trained models come from Experiment 2 (stage B) and are only tested here.
-# Analysis (results.py): relative gap + iters_to_tol_table + wall-clock time.
+# Analysis (paper_results.py): relative gap + cost_to_tol_table + wall-clock time.
 
 if RUN_EXPERIMENT_4:
     print_header('EXPERIMENT 4 (Start)')

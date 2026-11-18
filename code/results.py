@@ -63,7 +63,7 @@ if len(PARAMS_FISTA_UNTRAINED) > 0:
     fista_rel_gap_dicts = F_dicts[1:1+n_fista]                       # F_dicts[0] is ISTA
     inner_dicts = pm.load_data( 'inner_iter_hist', TEST_MODE, DATASET, TEST_DATASET_RATIO, PROBLEM, DATE,
                                 PARAMS_FISTA_UNTRAINED, [], [] )[1:1+n_fista]
-    pm.iters_to_tol_table( fista_rel_gap_dicts, PARAMS_FISTA_UNTRAINED, tols = [ 1e-2, 1e-3, 1e-5 ],
+    pm.cost_to_tol_table( fista_rel_gap_dicts, PARAMS_FISTA_UNTRAINED, tols = [ 1e-2, 1e-3, 1e-5 ],
                            inner_dicts = inner_dicts, table_path = DATA_PATH, table_name = 'iters_to_tol_fista' )
 
 ######################### TABLE: ITERATIONS TO REACH RELATIVE GAP (FISTA-DEV) ##################################
@@ -87,7 +87,7 @@ if len(FISTA_DEV_LIST) > 0:
         miniter, maxiter = minmaxiter
         print( f'===== FISTA-DEV: train data={train_dataset_ratio}, epochs={epochs}, N=[{miniter},{maxiter}], ablation={ablation} =====' )
         table_name = f'iters_to_tol_fista_dev_data{train_dataset_ratio}_ep{epochs}_N{miniter}-{maxiter}_abl{ablation}'
-        pm.iters_to_tol_table( rel_gap_dicts, params_list, tols = [ 1e-2, 1e-3, 1e-5 ],
+        pm.cost_to_tol_table( rel_gap_dicts, params_list, tols = [ 1e-2, 1e-3, 1e-5 ],
                                inner_dicts = inner_dicts, table_path = DATA_PATH, table_name = table_name )
 
 ######################### PLOTTING MEDIAN (F-F*)/F* ##################################

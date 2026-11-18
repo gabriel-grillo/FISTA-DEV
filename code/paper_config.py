@@ -26,14 +26,14 @@ TEST_BATCH_SIZE = 32
 #### Experiment 1: parameter selection for FISTA (untrained)
 GAMMA_FISTA       = [ 1.1, 1.5, 2.0, 2.5 ]
 ALPHA_FISTA       = [ 0.0, 0.25, 0.5, 0.75, 0.9 ]
-T_VARIANT_FISTA   = [ 1, 2 ]
+T_VARIANT_FISTA   = [ 1 ]
 VAL_DATASET_RATIO = 1.0
 
 #### Experiment 2A: screening for FISTA-DEV and DeepOpt
 GAMMA_DEV                  = [ 1.1, 1.5, 2.0 ]
 ALPHA_DEV                  = [ 0.25, 0.5, 0.75 ]
 T_VARIANT_DEV              = [ 1 ]
-ALPHA_DO                   = [ 0.1, 0.25, 0.5, 0.75, 0.9 ]
+ALPHA_DO                   = [ 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9 ]
 SCREEN_TRAIN_DATASET_RATIO = 0.2
 SCREEN_EPOCHS_TO_SAVE      = [ 10 ]
 
@@ -51,7 +51,7 @@ ABLATION = [ 'd', 'e', 'v', 'dev', 'theta' ]
 #######################################################################################################################
 
 #### Best FISTA parameters (from Experiment 1) -- (gamma, alpha, t_variant)
-BEST_FISTA = ( 1.5, 0.7, 1 )
+BEST_FISTA = ( 1.5, 0.5, 1 )
 
 #### FISTA-DEV configurations that pass the screening (from Experiment 2A) -- list of (gamma, alpha, t_variant)
 FINALISTS_FISTA_DEV = [ ( 1.5, 0.7, 1 ) ]
@@ -59,5 +59,8 @@ FINALISTS_FISTA_DEV = [ ( 1.5, 0.7, 1 ) ]
 #### Selected FISTA-DEV parameters (from Experiment 2B) -- (gamma, alpha, t_variant)
 BEST_FISTA_DEV = ( 1.5, 0.7, 1 )
 
-#### Selected DeepOpt parameter (from Experiment 2A)
+#### DeepOpt parameters that pass the screening (from Experiment 2A)
+FINALISTS_DO = [ 0.5 ]
+
+#### Selected DeepOpt parameter (from Experiment 2B)
 BEST_ALPHA_DO = 0.5

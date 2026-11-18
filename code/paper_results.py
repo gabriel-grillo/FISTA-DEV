@@ -13,15 +13,34 @@ from paper_config import *
 
 #### Which experiments to process (same flags as in paper_experiments.py)
 RUN_EXPERIMENT_1  = True
-RUN_EXPERIMENT_2A = True
-RUN_EXPERIMENT_2B = True
-RUN_EXPERIMENT_3  = True
-RUN_EXPERIMENT_4  = True
+RUN_EXPERIMENT_2A = False
+RUN_EXPERIMENT_2B = False
+RUN_EXPERIMENT_3  = False
+RUN_EXPERIMENT_4  = False
 
-#### Relative gap below which the methods stagnate (single precision); values below it are not shown
+#### Relative gap below which F* (from the 500 iterations of FISTA in F_ref) is not accurate; values below it are
+#### not shown (see estimate_tau.py)
 TAU = 1e-6
-#### Relative gap tolerances for the tables (low, medium and high accuracy)
-TOLS = [ 1e-2, 1e-4, 1e-5 ]
+#### Cost of one inner iteration of proxTV relative to one gradient evaluation (A and A^T), measured with
+#### measure_costs.py with batches of 32 problems. Cost of a run, in gradient evaluations: k + R_COST * (inner iterations)
+R_COST = 0.022
+#### Cost of one forward pass of each network relative to one gradient evaluation (measure_costs.py, batches of 32).
+#### The networks are only applied in the first K iterations. FILL WITH THE VALUES MEASURED BY measure_costs.py.
+R_NET    = { 'd': 0.191, 'e': 0.193, 'v': 0.199 }   # FISTA-DEV networks
+R_NET_DO = 0.383                               # DeepOpt networks (dx1 + dx2)
+if R_NET_DO == 0.0 or sum( R_NET.values() ) == 0.0:
+    print( 'WARNING: the costs of the networks (R_NET, R_NET_DO) are zero; run measure_costs.py and fill them in.' )
+
+def net_cost_fista_dev( ablation ):
+    # Cost per learned iteration of the networks used by FISTA-DEV with the given ablation
+    learned = { 'd': ['d'], 'e': ['e'], 'v': ['v'], 'dev': ['d','e','v'], 'theta': [], 'all': ['d','e','v'] }[ablation]
+    return sum( R_NET[c] for c in learned )
+
+def net_costs( n_untrained, fista_dev_list_, deepopt_list_ ):
+    # Network costs aligned with the dicts returned by load_rel_gap: [ISTA, FISTA..., FISTA-DEV..., DeepOpt...]
+    return [ 0.0 ] * ( 1 + n_untrained ) + [ net_cost_fista_dev( o[4] ) for o in fista_dev_list_ ] + [ R_NET_DO ] * len( deepopt_list_ )
+#### Relative gap tolerances for the tables (low and high accuracy)
+TOLS = [ 1e-2, 1e-5 ]
 
 #### Root folder of the results
 ROOT_PATH = os.path.join( os.getcwd(), 'paper_results_data' )
@@ -86,6 +105,45 @@ def plot_rel_gap( F_dicts, data_path, fig_name, last_iter = None ):
     fig.savefig( os.path.join( data_path, fig_name + pm.EXTENSION ) )
     return fig
 
+def cost_in_gradient_evaluations( inner_dict, r_cost = R_COST, r_net = 0.0 ):
+    # Cost of iterations 0,...,MAXITER of each problem, in gradient evaluations:
+    #   k + r_cost * (inner iterations up to k) + r_net * min(k, K)
+    inner = inner_dict.get('data')
+    k = np.arange( inner.shape[1] + 1 )[None,:]
+    inner_cum = np.concatenate( [ np.zeros( ( inner.shape[0], 1 ) ), np.cumsum( inner, axis = 1 ) ], axis = 1 )
+    return k + r_cost * inner_cum + r_net * np.minimum( k, K )
+
+def plot_rel_gap_vs_cost( F_dicts, inner_dicts, data_path, fig_name, nets = None, r_cost = R_COST, n_grid = 400, max_cost = None ):
+    # Median and interquartile range of (F-F*)/F* as a function of the cost, in gradient evaluations. For each problem,
+    # the relative gap at cost c is the one of the last iterate whose cost does not exceed c (step function).
+    nets = [ 0.0 ] * len( inner_dicts ) if nets is None else nets
+    costs = [ cost_in_gradient_evaluations( d, r_cost, r_net ) for d, r_net in zip( inner_dicts, nets ) ]
+    if max_cost is None:
+        max_cost = max( np.max( c ) for c in costs )
+    grid = np.geomspace( 1.0, max_cost, n_grid )
+    dicts = []
+    for d, c in zip( F_dicts, costs ):
+        rel_gap = d.get('data')
+        values = np.full( ( rel_gap.shape[0], n_grid ), np.nan )
+        for p in range( rel_gap.shape[0] ):
+            idx = np.searchsorted( c[p], grid, side = 'right' ) - 1
+            available = grid <= c[p, -1]          # beyond the end of the run, the value is not available
+            values[p, available] = rel_gap[p, idx[available]]
+        # quantiles only where at least half of the problems are available
+        enough = np.mean( np.isfinite( values ), axis = 0 ) >= 0.5
+        q25, med, q75 = np.full( ( 3, n_grid ), np.nan )
+        q25[enough], med[enough], q75[enough] = np.nanquantile( values[:, enough], [ 0.25, 0.5, 0.75 ], axis = 0 )
+        dicts.append( dict( center_line = med, lower_line = q25, upper_line = q75,
+                            label = d.get('label'), ls = d.get('ls'), c = d.get('c') ) )
+    dicts = [ dict( center_line = grid, lower_line = grid, upper_line = grid,
+                    label = 'cost (gradient evaluations)', ls = None, c = None ) ] + dicts
+    fig = pm.plot_data( dicts, ylabel = r'$\frac{F_b(\Tilde{x}_{b,k})-F_b^*}{F_b^*}$', fig_path = data_path, fig_name = fig_name )
+    ax = fig.gca()
+    ax.axhline( TAU, ls = '--', c = 'gray', lw = 0.8 )
+    ax.set_ylim( bottom = TAU / 2 )
+    fig.savefig( os.path.join( data_path, fig_name + pm.EXTENSION ) )
+    return fig
+
 def plot_stepsizes( mode, test_dataset_ratio, fista_list, fista_dev_list_, deepopt_list_, data_path, fig_name, labels = None ):
     step_dicts = pm.load_data( 'stepsize_hist', mode, DATASET, test_dataset_ratio, PROBLEM, DATE,
                                fista_list, fista_dev_list_, deepopt_list_ )
@@ -98,44 +156,23 @@ def plot_stepsizes( mode, test_dataset_ratio, fista_list, fista_dev_list_, deepo
     step_dicts = [ dict( center_line = k, lower_line = k, upper_line = k, label = '$k$', ls = None, c = None ) ] + step_dicts
     pm.plot_data( step_dicts, ylabel = r'$\rho_k$', fig_path = data_path, fig_name = fig_name, xscale = 'linear', yscale = 'linear' )
 
-def iters_to_tol_by_label( rel_gap_dicts, inner_dicts, labels, tols, table_path = None, table_name = None ):
-    # Methods in the rows, tolerances in the columns:
-    #   'iters' : median outer iterations (median total inner iterations) to reach each relative gap tolerance
-    #   'frac'  : percentage of problems that reached each tolerance
-    iters_rows, frac_rows = [], []
-    for d, d_inner in zip( rel_gap_dicts, inner_dicts ):
-        rel_gap = d.get('data')
-        max_iter = rel_gap.shape[1] - 1
-        inner_cum = np.concatenate( [ np.zeros( ( rel_gap.shape[0], 1 ) ), np.cumsum( d_inner.get('data'), axis = 1 ) ], axis = 1 )
-        iters_row, frac_row = [], []
-        for tol in tols:
-            reached = rel_gap <= tol
-            ever = reached.any( axis = 1 )
-            k_hit = np.where( ever, reached.argmax( axis = 1 ), np.inf )
-            inner_hit = np.where( ever, inner_cum[ np.arange( len(k_hit) ), np.where( ever, k_hit, 0 ).astype(int) ], np.inf )
-            med, med_inner = np.median( k_hit ), np.median( inner_hit )
-            cell = f'{int(med)}' if np.isfinite( med ) else f'> {max_iter}'
-            cell += f' ({int(med_inner)})' if np.isfinite( med_inner ) else ' (-)'
-            iters_row.append( cell )
-            frac_row.append( f'{100 * np.mean( ever ):.0f}%' )
-        iters_rows.append( iters_row )
-        frac_rows.append( frac_row )
-    columns = [ f'{tol:.0e}' for tol in tols ]
-    tables = {}
-    for key, rows, title in [ ( 'iters', iters_rows, 'median outer iterations (median total inner iterations)' ),
-                              ( 'frac', frac_rows, 'percentage of problems reaching the tolerance' ) ]:
-        table = pd.DataFrame( rows, index = labels, columns = columns )
-        table.index.name = 'method'
-        table.columns.name = 'tolerance'
-        tables[key] = table
-        print( f'{title}:' )
-        print( table.to_string(), '\n' )
-        if table_path is not None and table_name is not None:
-            with open( os.path.join( table_path, f'{table_name}_{key}.txt' ), 'w' ) as f:
-                f.write( table.to_string() )
-            with open( os.path.join( table_path, f'{table_name}_{key}.tex' ), 'w' ) as f:
-                f.write( table.to_latex() )
-    return tables
+def cost_to_tol_by_label( rel_gap_dicts, inner_dicts, labels, tols, table_path = None, table_name = None, nets = None, r_cost = R_COST ):
+    # Methods in the rows, tolerances in the columns, entries 'median cost (percentage of problems reaching the tolerance)',
+    # with cost k + r_cost * (inner iterations up to k) + r_net * min(k, K) in gradient evaluations (see pm.cost_to_tol)
+    nets = [ 0.0 ] * len( rel_gap_dicts ) if nets is None else nets
+    rows = [ [ pm.cost_frac_cell( *pm.cost_to_tol( d.get('data'), tol, d_inner.get('data'), r_cost, r_net, K ) ) for tol in tols ]
+             for d, d_inner, r_net in zip( rel_gap_dicts, inner_dicts, nets ) ]
+    table = pd.DataFrame( rows, index = labels, columns = [ f'{tol:.0e}' for tol in tols ] )
+    table.index.name = 'method'
+    table.columns.name = 'tolerance'
+    print( f'Median cost in gradient evaluations, r = {r_cost} (percentage of problems reaching the tolerance):' )
+    print( table.to_string(), '\n' )
+    if table_path is not None and table_name is not None:
+        with open( os.path.join( table_path, f'{table_name}.txt' ), 'w' ) as f:
+            f.write( table.to_string() )
+        with open( os.path.join( table_path, f'{table_name}.tex' ), 'w' ) as f:
+            f.write( table.to_latex() )
+    return table
 
 def metrics_grid_table( values, params_list, title, table_path, table_name ):
     # gamma in the rows, alpha in the columns (one table per t_variant)
@@ -160,10 +197,10 @@ if RUN_EXPERIMENT_1:
     F_dicts, inner_dicts = load_rel_gap( 'val', VAL_DATASET_RATIO, PARAMS_FISTA, [], [] )
 
     #### Tables: gamma x alpha for each tolerance (F_dicts[0] is ISTA)
-    pm.iters_to_tol_table( F_dicts[1:], PARAMS_FISTA, TOLS, inner_dicts = inner_dicts[1:],
-                           table_path = DATA_PATH, table_name = 'iters_to_tol_fista' )
+    pm.cost_to_tol_table( F_dicts[1:], PARAMS_FISTA, TOLS, inner_dicts = inner_dicts[1:],
+                           table_path = DATA_PATH, table_name = 'cost_to_tol_fista', r_cost = R_COST )
     #### ISTA, for reference
-    iters_to_tol_by_label( F_dicts[:1], inner_dicts[:1], [ 'ISTA' ], TOLS, table_path = DATA_PATH, table_name = 'iters_to_tol_ista' )
+    cost_to_tol_by_label( F_dicts[:1], inner_dicts[:1], [ 'ISTA' ], TOLS, table_path = DATA_PATH, table_name = 'cost_to_tol_ista' )
 
     #### Plots: one figure per (gamma, t_variant), with alpha varying, plus ISTA
     for gamma, t_variant in product( GAMMA_FISTA, T_VARIANT_FISTA ):
@@ -203,13 +240,14 @@ if RUN_EXPERIMENT_2A:
     for epochs in SCREEN_EPOCHS_TO_SAVE:
         idx = [ i for i, o in enumerate( FISTA_DEV_LIST ) if o[2] == epochs ]
         print(f'===== FISTA-DEV, {epochs} epochs =====')
-        pm.iters_to_tol_table( [ F_dicts[start+i] for i in idx ], [ FISTA_DEV_LIST[i][0] for i in idx ], TOLS,
+        pm.cost_to_tol_table( [ F_dicts[start+i] for i in idx ], [ FISTA_DEV_LIST[i][0] for i in idx ], TOLS,
                                inner_dicts = [ inner_dicts[start+i] for i in idx ],
-                               table_path = DATA_PATH, table_name = f'iters_to_tol_fista_dev_ep{epochs}' )
+                               table_path = DATA_PATH, table_name = f'cost_to_tol_fista_dev_ep{epochs}', r_cost = R_COST,
+                               r_net = net_cost_fista_dev( 'all' ), k_net = K )
     print('===== DeepOpt =====')
-    iters_to_tol_by_label( F_dicts[start+n_dev:], inner_dicts[start+n_dev:],
+    cost_to_tol_by_label( F_dicts[start+n_dev:], inner_dicts[start+n_dev:],
                            [ f'DeepOpt alpha={o[0]}, {o[2]} epochs' for o in DEEPOPT_LIST ], TOLS,
-                           table_path = DATA_PATH, table_name = 'iters_to_tol_deepopt' )
+                           table_path = DATA_PATH, table_name = 'cost_to_tol_deepopt', nets = [ R_NET_DO ] * len( DEEPOPT_LIST ) )
 
     print_header('EXPERIMENT 2A (End)')
 
@@ -230,8 +268,10 @@ if RUN_EXPERIMENT_2B:
     labels_table  = [ 'ISTA', f'FISTA gamma={BEST_FISTA[0]}, alpha={BEST_FISTA[1]}' ]
     labels_table += [ f'FISTA-DEV gamma={o[0][0]}, alpha={o[0][1]}, {o[2]} epochs' for o in FISTA_DEV_LIST ]
     labels_table += [ f'DeepOpt alpha={o[0]}, {o[2]} epochs' for o in DEEPOPT_LIST ]
-    iters_to_tol_by_label( F_dicts, inner_dicts, labels_table, TOLS, table_path = DATA_PATH, table_name = 'iters_to_tol' )
+    NETS = net_costs( 1, FISTA_DEV_LIST, DEEPOPT_LIST )
+    cost_to_tol_by_label( F_dicts, inner_dicts, labels_table, TOLS, table_path = DATA_PATH, table_name = 'cost_to_tol', nets = NETS )
     plot_rel_gap( F_dicts, DATA_PATH, 'optgap' )
+    plot_rel_gap_vs_cost( F_dicts, inner_dicts, DATA_PATH, 'optgap_vs_cost', nets = NETS )
     plot_rel_gap( F_dicts, DATA_PATH, 'optgap_zoom', last_iter = K + 10 )
 
     print_header('EXPERIMENT 2B (End)')
@@ -256,9 +296,11 @@ if RUN_EXPERIMENT_3:
     labels = [ 'FISTA (nothing learned)' ] + [ 'FISTA-DEV: ' + ABLATION_LABELS[a] for a in ABLATION_ALL ]
     for d, label in zip( F_dicts, labels ):
         d['label'] = label
+    NETS = [ 0.0 ] + [ net_cost_fista_dev( a ) for a in ABLATION_ALL ]
     plot_rel_gap( F_dicts, DATA_PATH, 'optgap' )
+    plot_rel_gap_vs_cost( F_dicts, inner_dicts, DATA_PATH, 'optgap_vs_cost', nets = NETS )
     plot_rel_gap( F_dicts, DATA_PATH, 'optgap_zoom', last_iter = K + 10 )
-    iters_to_tol_by_label( F_dicts, inner_dicts, labels, TOLS, table_path = DATA_PATH, table_name = 'iters_to_tol' )
+    cost_to_tol_by_label( F_dicts, inner_dicts, labels, TOLS, table_path = DATA_PATH, table_name = 'cost_to_tol', nets = NETS )
 
     #### Validation loss and penalty
     val_loss, penalty, _ = pm.compute_metrics( 'val', DATASET, VAL_DATASET_RATIO, PROBLEM, DATE, FISTA_DEV_LIST, [] )
@@ -293,7 +335,9 @@ if RUN_EXPERIMENT_4:
         d['label'] = label
 
     #### Relative gap (all iterations and zoom on the learned iterations and the transition after K)
+    NETS = net_costs( len( FISTA_TEST ), FISTA_DEV_LIST, DEEPOPT_LIST )
     fig = plot_rel_gap( F_dicts, DATA_PATH, 'optgap' )
+    plot_rel_gap_vs_cost( F_dicts, inner_dicts, DATA_PATH, 'optgap_vs_cost', nets = NETS )
     plot_rel_gap( F_dicts, DATA_PATH, 'optgap_zoom', last_iter = K + 10 )
     #### Marks where the proximal solver starts to fail
     flag_dicts = pm.load_data( 'flag_hist', 'test', DATASET, TEST_DATASET_RATIO, PROBLEM, DATE, FISTA_TEST, FISTA_DEV_LIST, DEEPOPT_LIST )
@@ -302,7 +346,7 @@ if RUN_EXPERIMENT_4:
     pm.add_marks( flag_dicts, fig, fig_path = DATA_PATH, fig_name = 'optgap_w_marks' )
 
     #### Iterations to reach each tolerance
-    iters_to_tol_by_label( F_dicts, inner_dicts, labels, TOLS, table_path = DATA_PATH, table_name = 'iters_to_tol' )
+    cost_to_tol_by_label( F_dicts, inner_dicts, labels, TOLS, table_path = DATA_PATH, table_name = 'cost_to_tol', nets = NETS )
 
     #### Step sizes
     plot_stepsizes( 'test', TEST_DATASET_RATIO, FISTA_TEST, FISTA_DEV_LIST, DEEPOPT_LIST, DATA_PATH, 'stepsize', labels = labels )

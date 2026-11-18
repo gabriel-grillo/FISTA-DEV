@@ -230,61 +230,64 @@ def print_metrics_analysis( val_loss, penalty, label_list, table_path = None, ta
             f.write(table.to_string( float_format = "%.2e" ) )
             # f.write(table.to_latex( float_format="%.2e" ) )
 
-def iters_to_tol_table( rel_gap_dicts, params_list, tols, inner_dicts = None, table_path = None, table_name = None ):
-    """Median number of iterations needed to reach each relative gap tolerance.
+def cost_to_tol( rel_gap, tol, inner_iters = None, r_cost = 0.0, r_net = 0.0, k_net = 0 ):
+    """Cost to reach the relative gap tolerance tol, in gradient evaluations, for each problem:
+        k + r_cost * (total inner iterations up to k) + r_net * min(k, k_net),
+    in which k is the first iteration with rel_gap <= tol (inf if the tolerance is never reached).
+
+    rel_gap     : relative gap (F-F*)/F*, shape [N, MAXITER+1]
+    inner_iters : inner_iter_hist, shape [N, MAXITER] (None: inner iterations are not counted)
+    Returns (cost of each problem, boolean array of the problems that reached the tolerance)."""
+    reached = rel_gap <= tol
+    ever = reached.any( axis = 1 )
+    k_hit = np.where( ever, reached.argmax( axis = 1 ), 0 )
+    cost = k_hit + r_net * np.minimum( k_hit, k_net )
+    if inner_iters is not None:
+        inner_cum = np.concatenate( [ np.zeros( ( rel_gap.shape[0], 1 ) ), np.cumsum( inner_iters, axis = 1 ) ], axis = 1 )
+        cost = cost + r_cost * inner_cum[ np.arange( rel_gap.shape[0] ), k_hit ]
+    return np.where( ever, cost, np.inf ), ever
+
+def cost_frac_cell( cost, ever ):
+    """'median cost (percentage of problems that reached the tolerance)'; the median is '-' if fewer than half of the
+    problems reached the tolerance."""
+    med = np.median( cost )
+    return ( f'{med:.1f}' if np.isfinite( med ) else '-' ) + f' ({100 * np.mean( ever ):.0f}%)'
+
+def cost_to_tol_table( rel_gap_dicts, params_list, tols, inner_dicts = None, table_path = None, table_name = None,
+                        r_cost = 0.0, r_net = 0.0, k_net = 0 ):
+    """For each tolerance, a table with gamma in the rows, alpha (and t_variant, if more than one) in the columns, and
+    entries 'median cost (percentage of problems that reached the tolerance)'.
 
     rel_gap_dicts : list of dicts whose 'data' is the relative gap (F-F*)/F*, shape [N, MAXITER+1]
     params_list   : list of (gamma, alpha, t_variant), in the same order as rel_gap_dicts
-    tols          : list of tolerances, e.g. [1e-2, 1e-3, 1e-5]
-    inner_dicts   : optional list of dicts whose 'data' is inner_iter_hist, shape [N, MAXITER],
-                    in the same order; if given, the median total number of inner (proxTV)
-                    iterations until reaching the tolerance is shown in parentheses
-    For each tolerance, two tables are built:
-        'iters' : median outer iterations (median total inner iterations)
-        'frac'  : percentage of problems that reached the tolerance
+    tols          : list of tolerances, e.g. [1e-2, 1e-5]
+    inner_dicts   : optional list of dicts whose 'data' is inner_iter_hist, shape [N, MAXITER], in the same order
+    r_cost        : cost of one inner iteration relative to one gradient evaluation (see measure_costs.py)
+    r_net, k_net  : cost of the networks applied in each of the first k_net iterations (learned methods), relative to
+                    one gradient evaluation (see measure_costs.py)
+    The cost, in gradient evaluations, is k + r_cost * (total inner iterations up to k) + r_net * min(k, k_net) (see
+    cost_to_tol). The tables are saved as <table_name>_tol<tol>.txt/.tex.
     """
     tables = {}
     for tol in tols:
         rows = []
-        for i, (d, params) in enumerate( zip( rel_gap_dicts, params_list ) ):
-            gamma, alpha, t_variant = params
-            rel_gap = d.get('data')
-            max_iter = rel_gap.shape[1] - 1
-            #### FIRST ITERATION REACHING THE TOLERANCE (inf IF NEVER REACHED)
-            reached = rel_gap <= tol
-            ever = reached.any( axis = 1 )
-            k_hit = np.where( ever, reached.argmax( axis = 1 ), np.inf )
-            #### MEDIAN OUTER ITERATIONS
-            med = np.median( k_hit )
-            iters = f'{int(med)}' if np.isfinite( med ) else f'> {max_iter}'
-            #### MEDIAN TOTAL INNER ITERATIONS UNTIL THE TOLERANCE
-            if inner_dicts is not None:
-                inner_cum = np.cumsum( inner_dicts[i].get('data'), axis = 1 )   # inner_cum[:,k-1] = inner iters up to iteration k
-                inner_cum = np.concatenate( [ np.zeros( ( inner_cum.shape[0], 1 ) ), inner_cum ], axis = 1 )
-                inner_hit = np.where( ever, inner_cum[ np.arange( len(k_hit) ), np.where( ever, k_hit, 0 ).astype(int) ], np.inf )
-                med_inner = np.median( inner_hit )
-                iters += f' ({int(med_inner)})' if np.isfinite( med_inner ) else ' (-)'
-            #### PERCENTAGE OF PROBLEMS THAT REACHED THE TOLERANCE
-            frac = f'{100 * np.mean( ever ):.0f}%'
-            rows.append( dict( gamma = gamma, alpha = alpha, t_variant = t_variant, iters = iters, frac = frac ) )
+        for i, ( d, ( gamma, alpha, t_variant ) ) in enumerate( zip( rel_gap_dicts, params_list ) ):
+            inner = inner_dicts[i].get('data') if inner_dicts is not None else None
+            cost, ever = cost_to_tol( d.get('data'), tol, inner, r_cost, r_net, k_net )
+            rows.append( dict( gamma = gamma, alpha = alpha, t_variant = t_variant, cell = cost_frac_cell( cost, ever ) ) )
         df = pd.DataFrame( rows )
-        #### TABLES: gamma IN THE ROWS, (t_variant, alpha) IN THE COLUMNS
-        multiple_variants = df['t_variant'].nunique() > 1
-        columns = [ 't_variant', 'alpha' ] if multiple_variants else 'alpha'
-        iters_title = 'median outer iterations (median total inner iterations)' if inner_dicts is not None else 'median outer iterations'
-        tables[tol] = {}
-        for key, title in [ ('iters', iters_title), ('frac', 'percentage of problems reaching the tolerance') ]:
-            table = df.pivot( index = 'gamma', columns = columns, values = key )
-            table = table.sort_index( axis = 1 )
-            table.index = [ f'{g:.2f}' for g in table.index ]
-            table.index.name = 'gamma'
-            tables[tol][key] = table
-            print( f'Relative gap tolerance {tol:.0e} -- {title}:' )
-            print( table.to_string(), '\n' )
-            if table_path is not None and table_name is not None:
-                fname = f'{table_name}_{key}_tol{tol:.0e}'
-                with open( os.path.join( table_path, fname + '.txt' ), 'w' ) as f:
-                    f.write( table.to_string() )
-                with open( os.path.join( table_path, fname + '.tex' ), 'w' ) as f:
-                    f.write( table.to_latex() )
+        #### gamma IN THE ROWS, (t_variant, alpha) IN THE COLUMNS
+        columns = [ 't_variant', 'alpha' ] if df['t_variant'].nunique() > 1 else 'alpha'
+        table = df.pivot( index = 'gamma', columns = columns, values = 'cell' ).sort_index( axis = 1 )
+        table.index = [ f'{g:.2f}' for g in table.index ]
+        table.index.name = 'gamma'
+        tables[tol] = table
+        print( f'Relative gap tolerance {tol:.0e} -- median cost in gradient evaluations (percentage of problems reaching the tolerance):' )
+        print( table.to_string(), '\n' )
+        if table_path is not None and table_name is not None:
+            fname = f'{table_name}_tol{tol:.0e}'
+            with open( os.path.join( table_path, fname + '.txt' ), 'w' ) as f:
+                f.write( table.to_string() )
+            with open( os.path.join( table_path, fname + '.tex' ), 'w' ) as f:
+                f.write( table.to_latex() )
     return tables
