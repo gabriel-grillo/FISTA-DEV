@@ -24,6 +24,7 @@ arising in computed tomography (CT), with images from the AAPM Low Dose CT Grand
 - [Setup](#setup)
 - [Running a single configuration](#running-a-single-configuration)
 - [Reproducing the experiments of the paper](#reproducing-the-experiments-of-the-paper)
+- [Performance measures](#performance-measures)
 - [Output folders](#output-folders)
 - [Implemented algorithms and problems](#implemented-algorithms-and-problems)
 - [Troubleshooting](#troubleshooting)
@@ -49,6 +50,8 @@ arising in computed tomography (CT), with images from the AAPM Low Dose CT Grand
     ├── paper_config.py       # Shared configuration of the experiments of the paper
     ├── paper_experiments.py  # Runs the experiments of the paper
     ├── paper_results.py      # Processes the results of the experiments of the paper (figures and tables)
+    ├── estimate_tau.py       # Estimates the accuracy of the reference optimal values and the threshold TAU
+    ├── measure_costs.py      # Measures the cost of inner iterations and networks relative to a gradient evaluation
     ├── single_experiment.py  # Runs a single configuration (for development)
     └── results.py            # Processes the results of single_experiment.py
 ```
@@ -135,7 +138,7 @@ The experiments are:
 
 | Flag | Experiment | Data | What is run |
 |---|---|---|---|
-| `RUN_EXPERIMENT_1`  | Parameter selection for FISTA | validation | ISTA and FISTA (no training) for a grid of $\gamma$, $\alpha$ and both variants of $T_k$ |
+| `RUN_EXPERIMENT_1`  | Parameter selection for FISTA | validation | ISTA and FISTA (no training) for a grid of $(\gamma, \alpha)$ |
 | `RUN_EXPERIMENT_2A` | Parameter selection for FISTA-DEV and DeepOpt (screening) | validation | FISTA-DEV for a grid of $(\gamma,\alpha)$ and DeepOpt for a grid of its parameter, trained with a fraction of the training data and few epochs |
 | `RUN_EXPERIMENT_2B` | Parameter selection for FISTA-DEV and DeepOpt (full budget) | validation | The finalists of FISTA-DEV and of DeepOpt, trained with all the training data |
 | `RUN_EXPERIMENT_3`  | Ablation study | validation | FISTA-DEV with the selected parameters, learning only some of its components ($d_k$, $e_k$, $v_k$, all the deviations, or only the step sizes) |
@@ -145,8 +148,9 @@ Each experiment depends on the parameters selected in the previous ones. The wor
 
 1. **Experiment 1.** In `paper_experiments.py`, set `RUN_EXPERIMENT_1 = True` and the other flags to `False`, and
    run `python3 paper_experiments.py`. Then set the same flags in `paper_results.py` and run
-   `python3 paper_results.py`. Using the tables of iterations to reach each relative gap (in
-   `paper_results_data/exp1/`), choose the parameters of FISTA and set `BEST_FISTA` in `paper_config.py`.
+   `python3 paper_results.py`. Using the tables of cost to reach each relative gap (in
+   `paper_results_data/exp1/`, see [Performance measures](#performance-measures)), choose the parameters of FISTA
+   and set `BEST_FISTA` in `paper_config.py`.
 2. **Experiment 2A.** Run both scripts with `RUN_EXPERIMENT_2A = True`. Using the validation loss and the tables
    in `paper_results_data/exp2a/`, set `FINALISTS_FISTA_DEV` and `FINALISTS_DO` in `paper_config.py`.
 3. **Experiment 2B.** Run both scripts with `RUN_EXPERIMENT_2B = True`. Using the results in
@@ -172,8 +176,47 @@ Some remarks:
 - Training a configuration with `LOAD_SAVED_MODELS = False` **deletes** previously saved models with the same
   parameters. Experiments 3 and 4 only test the full FISTA-DEV model trained in Experiment 2B, so they do not
   overwrite it.
-- `paper_results.py` hides relative optimality gaps below `TAU`, the level at which the methods stagnate in single
-  precision, and reports the number of iterations to reach the relative gaps in `TOLS`.
+- `paper_results.py` reads the constants `TAU`, `R_COST`, `R_NET` and `R_NET_DO`, described in
+  [Performance measures](#performance-measures).
+
+## Performance measures
+
+For each problem $b$, `paper_results.py` reports the relative optimality gap $(F_b(\tilde x_k) - F_b^\ast)/F_b^\ast$,
+in which $F_b^\ast$ is the smallest value of $F_b$ attained by all the methods and by the reference run saved in
+`data/<dataset>/F_ref/` (FISTA with $\alpha = 0$ and $\gamma = 2$ after 500 iterations). The figures show the
+median and the interquartile range over the problems, against the iterations and against the cost.
+
+**Cost.** The cost of a run up to iteration $k$ is measured in gradient evaluations (one application of the ray
+transform and one of its transpose),
+
+$$\mathrm{cost}(k) = k + r \cdot (\text{inner iterations of the proximal solver up to } k) + r_{\mathrm{net}} \cdot \min(k, K),$$
+
+in which $r$ (`R_COST`) is the cost of one inner iteration and $r_{\mathrm{net}}$ is the cost of the networks
+applied in each of the first $K$ iterations (`R_NET` for FISTA-DEV, depending on the ablation, and `R_NET_DO` for
+DeepOpt; zero for ISTA and FISTA). These ratios depend on the GPU and are measured by
+
+```bash
+python3 measure_costs.py              # batches of 32 problems, as in the tests
+```
+
+which prints the time of each operation and the ratios to be copied to `paper_results.py`.
+
+**Tables.** For each tolerance in `TOLS` ($10^{-2}$ and $10^{-5}$), the tables show the median cost to reach the
+relative gap and, in parentheses, the percentage of problems that reach it, as in `192.0 (100%)`. When fewer than
+half of the problems reach the tolerance, the median is shown as `-`.
+
+**Threshold `TAU`.** Since the reference run is still decreasing at its last iterations, $F_b^\ast$ approximates the
+optimal value only up to a small relative error, and the relative gaps are also limited by the resolution of single
+precision. Relative gaps below `TAU` are not shown. The accuracy of $F_b^\ast$ and the corresponding values of `TAU`
+are estimated by
+
+```bash
+python3 estimate_tau.py               # validation set
+python3 estimate_tau.py --mode test   # test set
+```
+
+which extrapolates the decrease rate of the gap of the reference run. For the data of the paper, the relative error
+of $F_b^\ast$ is below $10^{-7}$ for 90% of the problems, and `TAU = 1e-6`.
 
 ## Output folders
 

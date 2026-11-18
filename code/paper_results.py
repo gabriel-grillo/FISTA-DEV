@@ -256,7 +256,7 @@ if RUN_EXPERIMENT_2B:
     DATA_PATH = make_path( 'exp2b' )
 
     FISTA_DEV_LIST = fista_dev_list( FINALISTS_FISTA_DEV, [ 'all' ], FULL_EPOCHS_TO_SAVE, FULL_TRAIN_DATASET_RATIO )
-    DEEPOPT_LIST   = deepopt_list( [ BEST_ALPHA_DO ], FULL_EPOCHS_TO_SAVE, FULL_TRAIN_DATASET_RATIO )
+    DEEPOPT_LIST   = deepopt_list( FINALISTS_DO, FULL_EPOCHS_TO_SAVE, FULL_TRAIN_DATASET_RATIO )
     n_dev = len( FISTA_DEV_LIST )
 
     #### Validation loss and penalty

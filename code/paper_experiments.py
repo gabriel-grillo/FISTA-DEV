@@ -95,7 +95,7 @@ start_time = time.time()
 #################################################### EXPERIMENT 1 #####################################################
 ######################################## Parameter selection for FISTA (untrained) ####################################
 #######################################################################################################################
-# ISTA and FISTA on the validation set, for a grid of (gamma, alpha) and both variants of T_k.
+# ISTA and FISTA on the validation set, for a grid of (gamma, alpha).
 # Analysis (paper_results.py): cost_to_tol_table -> choose BEST_FISTA.
 
 if RUN_EXPERIMENT_1:
@@ -111,9 +111,9 @@ if RUN_EXPERIMENT_1:
 #######################################################################################################################
 # Stage A (screening, flag RUN_EXPERIMENT_2A): grid of (gamma, alpha) with a fraction of the training data and few epochs.
 #                      DeepOpt's parameter is screened with the same budget.
-#                      Analysis (paper_results.py): validation loss + cost_to_tol_table -> FINALISTS_FISTA_DEV, BEST_ALPHA_DO.
+#                      Analysis (paper_results.py): validation loss + cost_to_tol_table -> FINALISTS_FISTA_DEV, FINALISTS_DO.
 # Stage B (full budget, flag RUN_EXPERIMENT_2B): finalists retrained with all the training data and the full number of epochs.
-#                      Analysis (paper_results.py): validation loss + cost_to_tol_table -> BEST_FISTA_DEV.
+#                      Analysis (paper_results.py): validation loss + cost_to_tol_table -> BEST_FISTA_DEV, BEST_ALPHA_DO.
 
 if RUN_EXPERIMENT_2A:
     print_header('EXPERIMENT 2A (Start)')
@@ -128,10 +128,10 @@ if RUN_EXPERIMENT_2A:
 if RUN_EXPERIMENT_2B:
     print_header('EXPERIMENT 2B (Start)')
 
-    #### Stage B: full budget for the finalists (and for the selected DeepOpt)
+    #### Stage B: full budget for the finalists of FISTA-DEV and of DeepOpt
     run_fista_dev( 'val', FINALISTS_FISTA_DEV, [ 'all' ],
                    FULL_EPOCHS_TO_SAVE, FULL_TRAIN_DATASET_RATIO, VAL_DATASET_RATIO )
-    run_deepopt( 'val', [ BEST_ALPHA_DO ], FULL_EPOCHS_TO_SAVE, FULL_TRAIN_DATASET_RATIO, VAL_DATASET_RATIO )
+    run_deepopt( 'val', FINALISTS_DO, FULL_EPOCHS_TO_SAVE, FULL_TRAIN_DATASET_RATIO, VAL_DATASET_RATIO )
 
     print_header('EXPERIMENT 2B (End)')
 
