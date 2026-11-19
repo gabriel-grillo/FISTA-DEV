@@ -12,9 +12,9 @@ from paper_config import *
 #######################################################################################################################
 
 #### Which experiments to process (same flags as in paper_experiments.py)
-RUN_EXPERIMENT_1  = True
+RUN_EXPERIMENT_1  = False
 RUN_EXPERIMENT_2A = False
-RUN_EXPERIMENT_2B = False
+RUN_EXPERIMENT_2B = True
 RUN_EXPERIMENT_3  = False
 RUN_EXPERIMENT_4  = False
 

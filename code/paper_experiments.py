@@ -35,11 +35,11 @@ from paper_config import *
 
 #### Which experiments to run (they are meant to be run in order, editing the selected parameters in paper_config.py
 #### after the analysis of each experiment with paper_results.py)
-RUN_EXPERIMENT_1  = True    # Parameter selection for FISTA (untrained)
-RUN_EXPERIMENT_2A = True    # Parameter selection for FISTA-DEV and DeepOpt: screening
+RUN_EXPERIMENT_1  = False    # Parameter selection for FISTA (untrained)
+RUN_EXPERIMENT_2A = False    # Parameter selection for FISTA-DEV and DeepOpt: screening
 RUN_EXPERIMENT_2B = True    # Parameter selection for FISTA-DEV: full budget for the finalists
-RUN_EXPERIMENT_3  = True    # Ablation study for FISTA-DEV
-RUN_EXPERIMENT_4  = True    # Comparison with the baselines on the test set
+RUN_EXPERIMENT_3  = False    # Ablation study for FISTA-DEV
+RUN_EXPERIMENT_4  = False    # Comparison with the baselines on the test set
 
 #######################################################################################################################
 ################################################## AUXILIARY ROUTINES #################################################

@@ -54,13 +54,13 @@ ABLATION = [ 'd', 'e', 'v', 'dev', 'theta' ]
 BEST_FISTA = ( 1.5, 0.5, 1 )
 
 #### FISTA-DEV configurations that pass the screening (from Experiment 2A) -- list of (gamma, alpha, t_variant)
-FINALISTS_FISTA_DEV = [ ( 1.5, 0.7, 1 ) ]
+FINALISTS_FISTA_DEV = [ ( 1.1, 0.25, 1 ), ( 1.5, 0.25, 1 ), ( 1.5, 0.5, 1 ) ]
 
 #### Selected FISTA-DEV parameters (from Experiment 2B) -- (gamma, alpha, t_variant)
 BEST_FISTA_DEV = ( 1.5, 0.7, 1 )
 
 #### DeepOpt parameters that pass the screening (from Experiment 2A)
-FINALISTS_DO = [ 0.5 ]
+FINALISTS_DO = [ 0.2, 0.3, 0.4 ]
 
 #### Selected DeepOpt parameter (from Experiment 2B)
 BEST_ALPHA_DO = 0.5
