@@ -146,9 +146,9 @@ pm.plot_data( F_dicts_zoom,
 
 ######################### TRAINED ALGORITHMS' MEDIAN VALIDATION LOSS AND PENALTY ##################################
 if len(FISTA_DEV_LIST) > 0 or len(DEEPOPT_LIST) > 0:
-    val_loss, penalty, metrics_label_list = pm.compute_metrics( TEST_MODE, DATASET, TEST_DATASET_RATIO, PROBLEM,
+    val_loss, metrics_label_list = pm.compute_metrics( TEST_MODE, DATASET, TEST_DATASET_RATIO, PROBLEM,
                                                                 DATE, FISTA_DEV_LIST, DEEPOPT_LIST )
-    pm.print_metrics_analysis( val_loss, penalty, metrics_label_list, table_path = DATA_PATH, table_name = 'metrics_table' )
+    pm.print_metrics_analysis( val_loss, metrics_label_list, table_path = DATA_PATH, table_name = 'metrics_table' )
 
 ######################### PLOTTING EXTRA INFORMATION ##################################
 if not os.path.exists(os.path.join( DATA_PATH, 'extra' )):

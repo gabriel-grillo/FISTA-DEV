@@ -176,7 +176,6 @@ def compute_quantiles_rel_opt_gap( F_dicts, dataset, test_mode, problem, test_da
 
 def compute_metrics( test_mode, dataset, test_dataset_ratio, problem, date, fista_dev_list, deepopt_list ):
     val_loss_list = []
-    penalty_list = []
     label_list = []
     #### TRAINING DATASET
     ds = get_dataset( dataset, test_mode, problem, batch_size = 1, F_ref = None, overall_ratio = test_dataset_ratio )
@@ -195,8 +194,6 @@ def compute_metrics( test_mode, dataset, test_dataset_ratio, problem, date, fist
                                                       problem, miniter, maxiter, gamma, alpha, date, ablation, t_variant, epochs ] )
         hist = np.load( os.path.join( hist_path_fista_dev, 'Fhist.npy') )
         val_loss_list.append( np.mean( ( hist[:,miniter:maxiter+10+1] - F_opt_train ) / ( F_train_hist[:,miniter:maxiter+10+1] - F_opt_train ) ) )
-        penalty_max_iters = min( F_train_hist.shape[1], hist.shape[1] )
-        penalty_list.append( np.mean( np.maximum( (hist[:,maxiter+10+1:penalty_max_iters] - F_train_hist[:,maxiter+10+1:penalty_max_iters])/F_train_hist[:,maxiter+10+1:penalty_max_iters], 0.0 ) ) )
         label_list.append( get_label( 'fista-dev', [ train_dataset_ratio, miniter, maxiter, gamma, alpha, ablation, t_variant, epochs ] ) )
     #### DEEPOPT RESULTS
     for options in deepopt_list:
@@ -206,22 +203,17 @@ def compute_metrics( test_mode, dataset, test_dataset_ratio, problem, date, fist
                                                     problem, miniter, maxiter, alpha, date, epochs ] )
         hist = np.load( os.path.join( hist_path_deepopt, 'Fhist.npy') )
         val_loss_list.append( np.mean( ( hist[:,miniter:maxiter+10+1] - F_opt_train ) / ( F_train_hist[:,miniter:maxiter+10+1] - F_opt_train ) ) )
-        penalty_max_iters = min( F_train_hist.shape[1], hist.shape[1] )
-        penalty_list.append( np.mean( np.maximum( (hist[:,maxiter+10+1:penalty_max_iters] - F_train_hist[:,maxiter+10+1:penalty_max_iters])/F_train_hist[:,maxiter+10+1:penalty_max_iters], 0.0 ) ) )
         label_list.append( get_label( 'deepopt', [ train_dataset_ratio, miniter, maxiter, alpha, epochs ] ) )
     #### GENERAL ANALYSIS
     val_loss = np.stack( val_loss_list )
-    penalty = np.stack( penalty_list )
-    return val_loss, penalty, label_list
+    return val_loss, label_list
 
-def print_metrics_analysis( val_loss, penalty, label_list, table_path = None, table_name = None ):
+def print_metrics_analysis( val_loss, label_list, table_path = None, table_name = None ):
     print('Metrics analysis:')
     print( f'Best validation loss: {np.min(val_loss):.2e}' )
     print( f'Best algorithm w.r.t. validation loss: {label_list[np.argmin(val_loss)]}' )
-    print( f'Best penalty: {np.min(penalty):.2e}' )
-    print( f'Best parameters w.r.t. penalty: {label_list[np.argmin(penalty)]}' )
     if table_path is not None and table_name is not None:
-        table = pd.DataFrame( np.stack( [val_loss, penalty] ).T, index = label_list, columns = [ 'Validation loss', 'Penalty' ] )
+        table = pd.DataFrame( val_loss[:,None], index = label_list, columns = [ 'Validation loss' ] )
         table.index.name = 'Algorithm'
         table.columns.name = 'Metric'
         print( 'Table:' )

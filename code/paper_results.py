@@ -222,17 +222,15 @@ if RUN_EXPERIMENT_2A:
     FISTA_DEV_LIST = fista_dev_list( PARAMS_DEV, [ 'all' ], SCREEN_EPOCHS_TO_SAVE, SCREEN_TRAIN_DATASET_RATIO )
     DEEPOPT_LIST   = deepopt_list( ALPHA_DO, SCREEN_EPOCHS_TO_SAVE, SCREEN_TRAIN_DATASET_RATIO )
 
-    #### Validation loss (same quantity minimized in training) and penalty after the training horizon
-    val_loss, penalty, labels = pm.compute_metrics( 'val', DATASET, VAL_DATASET_RATIO, PROBLEM, DATE, FISTA_DEV_LIST, DEEPOPT_LIST )
+    #### Validation loss (same quantity minimized in training)
+    val_loss, labels = pm.compute_metrics( 'val', DATASET, VAL_DATASET_RATIO, PROBLEM, DATE, FISTA_DEV_LIST, DEEPOPT_LIST )
     n_dev = len( FISTA_DEV_LIST )
     for epochs in SCREEN_EPOCHS_TO_SAVE:
         idx = [ i for i, o in enumerate( FISTA_DEV_LIST ) if o[2] == epochs ]
         metrics_grid_table( val_loss[idx], [ FISTA_DEV_LIST[i][0] for i in idx ], f'FISTA-DEV validation loss, {epochs} epochs',
                             DATA_PATH, f'val_loss_fista_dev_ep{epochs}' )
-        metrics_grid_table( penalty[idx], [ FISTA_DEV_LIST[i][0] for i in idx ], f'FISTA-DEV penalty, {epochs} epochs',
-                            DATA_PATH, f'penalty_fista_dev_ep{epochs}' )
     print('DeepOpt:')
-    pm.print_metrics_analysis( val_loss[n_dev:], penalty[n_dev:], labels[n_dev:], table_path = DATA_PATH, table_name = 'metrics_deepopt' )
+    pm.print_metrics_analysis( val_loss[n_dev:], labels[n_dev:], table_path = DATA_PATH, table_name = 'val_loss_deepopt' )
 
     #### Iterations to reach each tolerance
     F_dicts, inner_dicts = load_rel_gap( 'val', VAL_DATASET_RATIO, [], FISTA_DEV_LIST, DEEPOPT_LIST )
@@ -259,9 +257,9 @@ if RUN_EXPERIMENT_2B:
     DEEPOPT_LIST   = deepopt_list( FINALISTS_DO, FULL_EPOCHS_TO_SAVE, FULL_TRAIN_DATASET_RATIO )
     n_dev = len( FISTA_DEV_LIST )
 
-    #### Validation loss and penalty
-    val_loss, penalty, labels = pm.compute_metrics( 'val', DATASET, VAL_DATASET_RATIO, PROBLEM, DATE, FISTA_DEV_LIST, DEEPOPT_LIST )
-    pm.print_metrics_analysis( val_loss, penalty, labels, table_path = DATA_PATH, table_name = 'metrics_table' )
+    #### Validation loss
+    val_loss, labels = pm.compute_metrics( 'val', DATASET, VAL_DATASET_RATIO, PROBLEM, DATE, FISTA_DEV_LIST, DEEPOPT_LIST )
+    pm.print_metrics_analysis( val_loss, labels, table_path = DATA_PATH, table_name = 'val_loss' )
 
     #### Iterations to reach each tolerance and relative gap
     F_dicts, inner_dicts = load_rel_gap( 'val', VAL_DATASET_RATIO, [ BEST_FISTA ], FISTA_DEV_LIST, DEEPOPT_LIST )
@@ -302,9 +300,9 @@ if RUN_EXPERIMENT_3:
     plot_rel_gap( F_dicts, DATA_PATH, 'optgap_zoom', last_iter = K + 10 )
     cost_to_tol_by_label( F_dicts, inner_dicts, labels, TOLS, table_path = DATA_PATH, table_name = 'cost_to_tol', nets = NETS )
 
-    #### Validation loss and penalty
-    val_loss, penalty, _ = pm.compute_metrics( 'val', DATASET, VAL_DATASET_RATIO, PROBLEM, DATE, FISTA_DEV_LIST, [] )
-    pm.print_metrics_analysis( val_loss, penalty, labels[1:], table_path = DATA_PATH, table_name = 'metrics_table' )
+    #### Validation loss
+    val_loss, _ = pm.compute_metrics( 'val', DATASET, VAL_DATASET_RATIO, PROBLEM, DATE, FISTA_DEV_LIST, [] )
+    pm.print_metrics_analysis( val_loss, labels[1:], table_path = DATA_PATH, table_name = 'val_loss' )
 
     #### Learned step sizes (only the ablations that learn them, compared with mu/L)
     STEP_ABLATION = [ 'theta', 'all' ]
